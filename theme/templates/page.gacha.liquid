@@ -1,0 +1,449 @@
+{% comment %}
+  ガチャページテンプレート。
+  - 抽選は行わない。/apps/gacha/status と /apps/gacha/draw (App Proxy 経由でVercel Functionsへ) を叩くだけ。
+  - React等のビルドツールは使わず、単一HTML + インラインJSで完結させる。
+  - チケット購入導線のURLは下の ticket_product_url を実際の商品ページに差し替えること。
+{% endcomment %}
+{% assign ticket_product_url = '/products/gacha-ticket' %}
+
+<div id="gacha-app" class="gacha-app">
+  <h1 class="gacha-title">ガチャ</h1>
+
+  {% if customer %}
+    <div id="gacha-state-loading" class="gacha-panel gacha-panel--center">
+      <p>読み込み中...</p>
+    </div>
+
+    <div id="gacha-state-zero" class="gacha-panel gacha-panel--center" hidden>
+      <p class="gacha-balance">チケット残高: <strong>0枚</strong></p>
+      <p>ガチャを引くにはチケットが必要です。</p>
+      <a class="gacha-btn gacha-btn--primary" href="{{ ticket_product_url }}">チケットを購入する</a>
+    </div>
+
+    <div id="gacha-state-ready" class="gacha-panel" hidden>
+      <div class="gacha-status-row">
+        <p class="gacha-balance">チケット残高: <strong id="gacha-balance-value">0</strong>枚</p>
+        <p id="gacha-pity-text" class="gacha-pity-text"></p>
+      </div>
+
+      <div class="gacha-machine">
+        <div id="gacha-machine-idle" class="gacha-machine-visual">
+          <div class="gacha-capsule"></div>
+        </div>
+        <div id="gacha-machine-drawing" class="gacha-machine-visual" hidden>
+          <div class="gacha-capsule gacha-capsule--spin"></div>
+        </div>
+      </div>
+
+      <button id="gacha-draw-btn" type="button" class="gacha-btn gacha-btn--primary gacha-btn--large">
+        ガチャを引く(チケット1枚を消費)
+      </button>
+    </div>
+
+    <div id="gacha-state-result" class="gacha-panel gacha-panel--center" hidden>
+      <p class="gacha-result-label" id="gacha-result-guaranteed" hidden>確定枠(天井)当選!</p>
+      <h2 id="gacha-result-prize-name" class="gacha-result-prize"></h2>
+      <p class="gacha-result-code">クーポンコード: <code id="gacha-result-code"></code></p>
+      <p class="gacha-result-expires">有効期限: <span id="gacha-result-expires"></span>(1回のみ使用可能)</p>
+      <a id="gacha-result-checkout" class="gacha-btn gacha-btn--primary gacha-btn--large" href="#">
+        このクーポンで買う
+      </a>
+      <button id="gacha-draw-again-btn" type="button" class="gacha-btn gacha-btn--secondary">
+        結果を閉じる
+      </button>
+    </div>
+
+    <div id="gacha-state-error" class="gacha-panel gacha-panel--center" hidden>
+      <p id="gacha-error-message" class="gacha-error-message"></p>
+      <button id="gacha-error-retry-btn" type="button" class="gacha-btn gacha-btn--secondary">
+        もう一度読み込む
+      </button>
+    </div>
+  {% else %}
+    <div class="gacha-panel gacha-panel--center">
+      <p>ガチャを引くにはログインが必要です。</p>
+      <a class="gacha-btn gacha-btn--primary" href="/account/login?return_url={{ request.path | url_encode }}">
+        ログインしてガチャを引く
+      </a>
+    </div>
+  {% endif %}
+
+  <section class="gacha-notices">
+    <details class="gacha-accordion" open>
+      <summary>景品と当選確率</summary>
+      <table class="gacha-prize-table">
+        <thead>
+          <tr>
+            <th>景品</th>
+            <th>確率</th>
+            <th>確定枠対象</th>
+          </tr>
+        </thead>
+        <tbody id="gacha-prize-table-body">
+          <tr><td colspan="3">読み込み中...</td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <ul class="gacha-notice-list">
+      <li>必ず何らかの景品が当たります(ハズレなし・全数当選)。</li>
+      <li>週に <strong id="gacha-notice-threshold">7</strong> 回引くと、その回は上位景品(確定枠)からの当選になります。</li>
+      <li>クーポンの有効期限は発行から<strong id="gacha-notice-valid-days">14</strong>日間で、1回のみ使用できます。</li>
+      <li>週の集計は毎週月曜0時にリセットされます。</li>
+      <li>購入済みのチケットは払い戻しできません。</li>
+    </ul>
+  </section>
+</div>
+
+<style>
+  .gacha-app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: #222;
+  }
+  .gacha-title {
+    font-size: 22px;
+    text-align: center;
+    margin: 8px 0 20px;
+  }
+  .gacha-panel {
+    border: 1px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 20px 16px;
+    margin-bottom: 16px;
+    background: #fff;
+  }
+  .gacha-panel--center {
+    text-align: center;
+  }
+  .gacha-status-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  .gacha-balance {
+    font-size: 16px;
+    margin: 0;
+  }
+  .gacha-pity-text {
+    font-size: 13px;
+    color: #b8860b;
+    margin: 0;
+  }
+  .gacha-machine {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 160px;
+    margin-bottom: 20px;
+  }
+  .gacha-machine-visual {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .gacha-capsule {
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ff6b6b 50%, #ffe66d 50%);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  }
+  .gacha-capsule--spin {
+    animation: gacha-spin 1.1s linear infinite, gacha-bounce 0.6s ease-in-out infinite alternate;
+  }
+  @keyframes gacha-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes gacha-bounce {
+    from { transform: translateY(0) rotate(0deg); }
+    to { transform: translateY(-14px) rotate(180deg); }
+  }
+  .gacha-btn {
+    display: inline-block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px 20px;
+    border-radius: 999px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .gacha-btn--primary {
+    background: #ff4757;
+    color: #fff;
+  }
+  .gacha-btn--secondary {
+    background: #f1f2f6;
+    color: #333;
+    margin-top: 10px;
+  }
+  .gacha-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .gacha-btn--large {
+    font-size: 17px;
+    padding: 16px 20px;
+  }
+  .gacha-result-label {
+    color: #ff9f1a;
+    font-weight: 700;
+    margin: 0 0 8px;
+  }
+  .gacha-result-prize {
+    font-size: 20px;
+    margin: 0 0 12px;
+  }
+  .gacha-result-code code {
+    background: #f1f2f6;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  .gacha-result-expires {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 20px;
+  }
+  .gacha-error-message {
+    color: #c0392b;
+    margin-bottom: 12px;
+  }
+  .gacha-notices {
+    margin-top: 24px;
+  }
+  .gacha-accordion {
+    border: 1px solid #e5e5e5;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    background: #fafafa;
+  }
+  .gacha-accordion summary {
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .gacha-prize-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  .gacha-prize-table th,
+  .gacha-prize-table td {
+    text-align: left;
+    padding: 6px 4px;
+    border-bottom: 1px solid #eee;
+  }
+  .gacha-notice-list {
+    font-size: 12px;
+    color: #555;
+    line-height: 1.7;
+    padding-left: 18px;
+  }
+</style>
+
+{% if customer %}
+<script>
+(function () {
+  "use strict";
+
+  var PROXY_BASE = "/apps/gacha";
+  var DRAW_ANIMATION_MS = 2000; // 演出時間(1.5〜2.5秒の範囲で固定値を使用)
+
+  var els = {
+    loading: document.getElementById("gacha-state-loading"),
+    zero: document.getElementById("gacha-state-zero"),
+    ready: document.getElementById("gacha-state-ready"),
+    result: document.getElementById("gacha-state-result"),
+    error: document.getElementById("gacha-state-error"),
+    balanceValue: document.getElementById("gacha-balance-value"),
+    pityText: document.getElementById("gacha-pity-text"),
+    machineIdle: document.getElementById("gacha-machine-idle"),
+    machineDrawing: document.getElementById("gacha-machine-drawing"),
+    drawBtn: document.getElementById("gacha-draw-btn"),
+    resultGuaranteed: document.getElementById("gacha-result-guaranteed"),
+    resultPrizeName: document.getElementById("gacha-result-prize-name"),
+    resultCode: document.getElementById("gacha-result-code"),
+    resultExpires: document.getElementById("gacha-result-expires"),
+    resultCheckout: document.getElementById("gacha-result-checkout"),
+    drawAgainBtn: document.getElementById("gacha-draw-again-btn"),
+    errorMessage: document.getElementById("gacha-error-message"),
+    errorRetryBtn: document.getElementById("gacha-error-retry-btn"),
+    prizeTableBody: document.getElementById("gacha-prize-table-body"),
+    noticeThreshold: document.getElementById("gacha-notice-threshold"),
+    noticeValidDays: document.getElementById("gacha-notice-valid-days"),
+  };
+
+  function showOnly(el) {
+    [els.loading, els.zero, els.ready, els.result, els.error].forEach(function (panel) {
+      if (panel) panel.hidden = panel !== el;
+    });
+  }
+
+  function formatPercent(p) {
+    return (p * 100).toFixed(2) + "%";
+  }
+
+  function formatDate(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.getFullYear() + "/" + (d.getMonth() + 1) + "/" + d.getDate();
+  }
+
+  function generateUUID() {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    // フォールバック(古いブラウザ用)
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function renderPrizeTable(prizes) {
+    if (!prizes || prizes.length === 0) {
+      els.prizeTableBody.innerHTML = "<tr><td colspan=\"3\">現在ラインナップはありません</td></tr>";
+      return;
+    }
+    els.prizeTableBody.innerHTML = prizes
+      .map(function (p) {
+        var name = escapeHtml(p.name);
+        var prob = formatPercent(p.probability);
+        var pool = p.is_guaranteed_pool ? "○" : "";
+        return "<tr><td>" + name + "</td><td>" + prob + "</td><td>" + pool + "</td></tr>";
+      })
+      .join("");
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderStatus(status) {
+    renderPrizeTable(status.prizes);
+    if (els.noticeThreshold) els.noticeThreshold.textContent = status.weekly.threshold;
+    if (els.noticeValidDays) els.noticeValidDays.textContent = status.coupon_valid_days;
+
+    if (status.ticket_balance <= 0) {
+      showOnly(els.zero);
+      return;
+    }
+
+    els.balanceValue.textContent = status.ticket_balance;
+    if (status.weekly.remaining > 0) {
+      els.pityText.textContent = "今週あと" + status.weekly.remaining + "回で確定枠!";
+    } else {
+      els.pityText.textContent = "";
+    }
+    showOnly(els.ready);
+  }
+
+  function showError(message) {
+    els.errorMessage.textContent = message;
+    showOnly(els.error);
+  }
+
+  function fetchStatus() {
+    showOnly(els.loading);
+    fetch(PROXY_BASE + "/status", { credentials: "same-origin" })
+      .then(function (res) {
+        if (!res.ok) throw new Error("STATUS_ERROR_" + res.status);
+        return res.json();
+      })
+      .then(renderStatus)
+      .catch(function () {
+        showError("情報の取得に失敗しました。時間を置いて再度お試しください。");
+      });
+  }
+
+  var currentIdempotencyKey = null;
+
+  function draw() {
+    if (!currentIdempotencyKey) {
+      currentIdempotencyKey = generateUUID();
+    }
+    var key = currentIdempotencyKey;
+
+    els.drawBtn.disabled = true;
+    els.machineIdle.hidden = true;
+    els.machineDrawing.hidden = false;
+
+    var animationDone = new Promise(function (resolve) {
+      setTimeout(resolve, DRAW_ANIMATION_MS);
+    });
+
+    var requestDone = fetch(PROXY_BASE + "/draw", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idempotency_key: key }),
+    }).then(function (res) {
+      return res.json().then(function (body) {
+        return { ok: res.ok, status: res.status, body: body };
+      });
+    });
+
+    Promise.all([animationDone, requestDone])
+      .then(function (results) {
+        var response = results[1];
+        els.machineDrawing.hidden = true;
+        els.machineIdle.hidden = false;
+
+        if (!response.ok) {
+          els.drawBtn.disabled = false;
+          if (response.status === 400 && response.body.error === "insufficient_balance") {
+            fetchStatus();
+            return;
+          }
+          if (response.status === 502 && response.body.retryable) {
+            // クーポン発行のみ失敗。同じ idempotency_key のまま再試行可能。
+            showError("クーポン発行に失敗しました。もう一度「ガチャを引く」を押してください。");
+            return;
+          }
+          showError("エラーが発生しました。もう一度お試しください。");
+          return;
+        }
+
+        currentIdempotencyKey = null; // 成功したので次回は新しいキーを使う
+        renderResult(response.body);
+      })
+      .catch(function () {
+        els.machineDrawing.hidden = true;
+        els.machineIdle.hidden = false;
+        els.drawBtn.disabled = false;
+        showError("通信エラーが発生しました。もう一度お試しください。");
+      });
+  }
+
+  function renderResult(data) {
+    els.resultGuaranteed.hidden = !data.is_guaranteed;
+    els.resultPrizeName.textContent = data.prize.name;
+    els.resultCode.textContent = data.coupon.code;
+    els.resultExpires.textContent = formatDate(data.coupon.expires_at);
+    els.resultCheckout.href = data.checkout_url;
+    showOnly(els.result);
+    els.drawBtn.disabled = false;
+  }
+
+  els.drawBtn.addEventListener("click", draw);
+  els.drawAgainBtn.addEventListener("click", fetchStatus);
+  els.errorRetryBtn.addEventListener("click", fetchStatus);
+
+  fetchStatus();
+})();
+</script>
+{% endif %}
