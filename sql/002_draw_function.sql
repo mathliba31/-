@@ -97,9 +97,12 @@ begin
   v_week_start := (now() at time zone 'utc')::date - v_offset;
 
   -- 3-1. customers 行をロック
-  select ticket_balance into v_balance
+  -- 列名を明示的に customers. で修飾する。RETURNS TABLE の出力列 (ticket_balance 等) と
+  -- 同名のテーブル列があると、修飾なしではPL/pgSQLが変数参照と解釈してしまい
+  -- "column reference is ambiguous" エラーになるため。
+  select customers.ticket_balance into v_balance
     from customers
-    where shopify_customer_id = p_customer_id
+    where customers.shopify_customer_id = p_customer_id
     for update;
 
   if not found then
@@ -126,7 +129,8 @@ begin
       set guaranteed_granted = true
       where shopify_customer_id = p_customer_id and week_start = v_week_start;
 
-    select id, name, shopify_variant_id, discount_type, discount_value, list_price
+    select prizes.id, prizes.name, prizes.shopify_variant_id, prizes.discount_type,
+           prizes.discount_value, prizes.list_price
       into v_prize
       from prizes
       where is_active and weight > 0 and is_guaranteed_pool
@@ -134,7 +138,8 @@ begin
       order by -ln(random()) / weight
       limit 1;
   else
-    select id, name, shopify_variant_id, discount_type, discount_value, list_price
+    select prizes.id, prizes.name, prizes.shopify_variant_id, prizes.discount_type,
+           prizes.discount_value, prizes.list_price
       into v_prize
       from prizes
       where is_active and weight > 0
@@ -153,9 +158,9 @@ begin
   update prizes set issued_count = issued_count + 1 where id = v_prize.id;
 
   -- 3-6. ticket_balance を -1
-  update customers set ticket_balance = ticket_balance - 1
+  update customers set ticket_balance = customers.ticket_balance - 1
     where shopify_customer_id = p_customer_id
-    returning ticket_balance into v_balance;
+    returning customers.ticket_balance into v_balance;
 
   -- 3-7. ticket_ledger に記録
   insert into ticket_ledger (shopify_customer_id, delta, reason, ref_id)
