@@ -96,7 +96,7 @@ App Proxy経由のリクエストは `signature` クエリパラメータをタ�
 
 ```bash
 npm install
-npm run build   # 型チェック
+npm run typecheck  # 型チェック
 npm test        # 単体テスト(署名検証・週計算)
 ```
 

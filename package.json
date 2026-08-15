@@ -5,7 +5,7 @@
   "description": "Shopify向け有料ガチャ機能。抽選はサーバー(Vercel Functions)で行い、確率・価格・景品はSupabaseの値として管理する。",
   "type": "commonjs",
   "scripts": {
-    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
