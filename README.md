@@ -1,8 +1,10 @@
 # Shopify ガチャアプリ
 
 Shopifyストア向けの有料ガチャ機能。抽選はサーバー(Vercel Functions)で行い、
-確率・価格・景品はすべてSupabase(PostgreSQL)の値として持つ。景品はすべて
-Shopifyの割引コードとして発行し、決済・在庫・配送はShopifyの通常フローに任せる。
+抽選エンジンの実データはSupabase(PostgreSQL)に持つ。景品の確率・割引内容などの
+設定はShopify商品のメタフィールドで管理し、同期APIでSupabaseへ反映する(運用者は
+Shopify管理画面だけを触ればよい)。景品はすべてShopifyの割引コードとして発行し、
+決済・在庫・配送はShopifyの通常フローに任せる。
 
 ## 構成
 
@@ -26,6 +28,7 @@ Shopifyの割引コードとして発行し、決済・在庫・配送はShopify
    - Proxy URL: `https://<vercel-app>.vercel.app/api/proxy`
 3. 「ガチャチケット」商品(1回券・10回券など)を作成し、バリアントIDを控える。
 4. `orders/paid` Webhookを `https://<vercel-app>.vercel.app/api/webhooks/orders-paid` へ登録する。
+5. 景品管理用に、商品メタフィールド定義とコレクションを用意する(詳細は「景品の管理」参照)。
 
 ### 2. Supabase側
 
@@ -38,10 +41,11 @@ sql/003_views.sql         -- v_return_rate / v_coupon_use_rate(運用・効果�
 sql/004_grant_tickets.sql -- grant_tickets(): チケット付与(Webhook用)
 sql/005_enable_rls.sql    -- 全テーブルでRLSを有効化(anon/authenticatedからのアクセスを遮断)
 sql/006_campaign_events.sql -- campaign_events: Flowセグメント配信用のイベント期間管理
+sql/007_prizes_unique_variant.sql -- prizesにshopify_variant_idの一意制約を追加(景品同期のupsert用)
 ```
 
-適用後、`prizes` と `ticket_products` にデータを投入する。`sql/seed.example.sql` にサンプルがあるので、
-実際の `shopify_variant_id` に置き換えて使う。
+適用後、`ticket_products`(チケット商品の対応表)にデータを投入する。`prizes`(景品マスタ)は
+「景品の管理」に記載の同期API経由で投入するため、手動での初期投入は不要。
 
 ### 3. Vercel側
 
@@ -55,6 +59,7 @@ SHOPIFY_API_VERSION      # 省略時 2024-10
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
 ADMIN_API_SECRET         # /api/admin/* を叩くための共有シークレット(Bearerトークン)
+SHOPIFY_GACHA_COLLECTION_HANDLE  # 「ガチャ景品」コレクションのハンドル(景品同期に使用)
 ```
 
 ### 4. テーマ側
@@ -74,6 +79,7 @@ ADMIN_API_SECRET         # /api/admin/* を叩くための共有シークレッ�
 | POST | `/api/webhooks/customers-redact` | GDPR必須Webhook: 顧客データ削除要求(個人情報は保存していないため受領確認のみ) |
 | POST | `/api/webhooks/shop-redact` | GDPR必須Webhook: アプリアンインストール後48時間で顧客関連データを削除 |
 | POST | `/api/admin/reissue` | クーポン未発行のdrawを検出し再発行する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
+| POST | `/api/admin/sync-prizes` | Shopifyの「ガチャ景品」コレクション+メタフィールドを`prizes`へ同期する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
 
 App Proxy経由のリクエストは `signature` クエリパラメータをタイミングセーフに検証し、
 `logged_in_customer_id` が空の場合は401を返す(未ログイン)。リクエストボディから
@@ -105,6 +111,44 @@ uri = "https://<VercelのURL>/api/webhooks/shop-redact"
 紐づくチケット残高・抽選履歴・クーポンのみ)のため、`customers/redact` は受領確認のみ返す。
 `shop/redact` はアンインストール48時間後に顧客関連データ(`customers`/`ticket_ledger`/
 `weekly_counters`/`draws`/`coupons`)を削除する(景品マスタ等の運用設定は残す)。
+
+## 景品の管理(Shopify商品メタフィールド + コレクション同期)
+
+景品の確率や割引内容は、SupabaseのテーブルではなくShopify商品側で管理する。
+運用者はShopify管理画面(商品編集・コレクション編集)だけを触ればよい。
+
+### 仕組み
+
+1. 「ガチャ景品」コレクション(ハンドルは`SHOPIFY_GACHA_COLLECTION_HANDLE`で指定)を作成し、
+   景品にしたい商品を追加する。
+2. 各商品に、以下の商品メタフィールド(namespace: `gacha`)を設定する。
+3. `POST /api/admin/sync-prizes` を叩くと、コレクション内の商品とメタフィールドを読み取り、
+   Supabaseの`prizes`テーブルへ upsert する(`lib/shopifySync.ts` → `api/admin/sync-prizes.ts`)。
+   コレクションから外れた商品は`is_active = false`になる(過去ログとの整合性のため削除はしない)。
+
+### メタフィールド定義(Settings → カスタムデータ → 商品 で作成)
+
+| キー | 型 | 内容 |
+|---|---|---|
+| `gacha.weight` | number_integer | 抽選の重み。**未設定の商品は同期対象外**(コレクションに入れただけでは有効にならない) |
+| `gacha.discount_type` | single_line_text_field | `free_product` / `amount_off` / `percent_off`。未設定時は`free_product` |
+| `gacha.discount_value` | number_integer | `amount_off`は円、`percent_off`は% |
+| `gacha.is_guaranteed_pool` | boolean | 天井(確定枠)の対象かどうか |
+| `gacha.stock_limit` | number_integer | ガチャとしての発行上限(Shopifyの在庫数とは別概念)。未設定なら無制限 |
+| `gacha.unit_cost` | number_integer | 実質原価(保管コスト+廃棄リスク−回収額)。還元率レポート用 |
+
+商品の**定価**(`list_price`)と**商品名**はメタフィールドではなく、商品の価格・タイトルからそのまま読み取る。
+複数バリアントを持つ商品は先頭のバリアントのみが対象になる。
+
+### 同期の実行
+
+```bash
+curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
+  -H "Authorization: Bearer <ADMIN_API_SECRET>"
+```
+
+レスポンスに`upserted`(反映件数)・`deactivated`(無効化件数)・`skipped`(メタフィールド未設定などでスキップした商品と理由)・`failures`が返る。
+商品を追加・変更したら、この同期を実行するだけで反映される(デプロイ不要)。
 
 ## 抽選の整合性
 
@@ -158,8 +202,10 @@ insert into campaign_events (key, name, starts_at, ends_at) values
 
 ## 運用
 
-- `prizes.weight` をSupabaseのテーブルエディタで編集するだけで確率が変わる(デプロイ不要)。
-- `prizes.is_active = false` で景品を停止、`stock_limit` で発行上限を設定できる。
+- 景品の確率(`weight`)や割引内容は、Shopify商品のメタフィールドを編集して
+  `POST /api/admin/sync-prizes` を叩くだけで変わる(デプロイ不要。「景品の管理」参照)。
+- 景品を止めたいときはコレクションから外す(`is_active = false`になる)、
+  上限を設けたいときは`gacha.stock_limit`メタフィールドを設定する。
 - `v_return_rate` ビューで表示還元率・実質原価率を確認できる(`sql/003_views.sql`)。
 - `v_coupon_use_rate` ビューでクーポン使用率(景品別)を確認できる。
 

@@ -26,12 +26,12 @@ const DISCOUNT_CREATE_MUTATION = /* GraphQL */ `
   }
 `;
 
-interface GraphQLResponse<T> {
+export interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
 }
 
-async function shopifyGraphQL<T>(query: string, variables: Record<string, unknown>): Promise<GraphQLResponse<T>> {
+export async function shopifyGraphQL<T>(query: string, variables: Record<string, unknown>): Promise<GraphQLResponse<T>> {
   const url = `https://${env.shopifyShopDomain}/admin/api/${env.shopifyApiVersion}/graphql.json`;
   const res = await fetch(url, {
     method: 'POST',

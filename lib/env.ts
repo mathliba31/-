@@ -22,6 +22,9 @@ export const env = {
   get shopifyCurrencyCode() {
     return process.env.SHOPIFY_CURRENCY_CODE || 'JPY';
   },
+  get shopifyGachaCollectionHandle() {
+    return required('SHOPIFY_GACHA_COLLECTION_HANDLE');
+  },
   get supabaseUrl() {
     return required('SUPABASE_URL');
   },

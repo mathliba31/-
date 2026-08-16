@@ -1,5 +1,9 @@
 -- 動作確認用のサンプルデータ。
 -- shopify_variant_id は実ストアのバリアントIDに置き換えて投入すること。
+--
+-- 【注意】実運用ではprizesはこのファイルで手動投入するのではなく、
+-- Shopify商品メタフィールド + POST /api/admin/sync-prizes による同期で投入する
+-- (README「景品の管理」参照)。ここでのprizes投入はローカルでのDB単体テスト用。
 
 insert into ticket_products (shopify_variant_id, ticket_count) values
   ('1000000000001', 1),   -- 1回券

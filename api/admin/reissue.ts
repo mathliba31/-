@@ -1,22 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { timingSafeEqual } from 'crypto';
-import { env } from '../../lib/env';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
 import { issueCouponForDraw } from '../../lib/issueCoupon';
+import { isAdminAuthorized } from '../../lib/adminAuth';
 import type { DiscountType, PrizeInfo } from '../../lib/types';
 
 const BATCH_LIMIT = 20;
-
-function isAuthorized(req: VercelRequest): boolean {
-  const header = req.headers.authorization;
-  const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-  if (!token) return false;
-
-  const expected = Buffer.from(env.adminApiSecret, 'utf8');
-  const actual = Buffer.from(token, 'utf8');
-  if (expected.length !== actual.length) return false;
-  return timingSafeEqual(expected, actual);
-}
 
 interface DrawWithPrize {
   id: string;
@@ -46,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'method_not_allowed' });
   }
 
-  if (!isAuthorized(req)) {
+  if (!isAdminAuthorized(req)) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
