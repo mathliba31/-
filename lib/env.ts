@@ -16,6 +16,9 @@ export const env = {
   get shopifyApiSecret() {
     return required('SHOPIFY_API_SECRET');
   },
+  get shopifyClientId() {
+    return required('SHOPIFY_CLIENT_ID');
+  },
   get shopifyApiVersion() {
     return process.env.SHOPIFY_API_VERSION || '2024-10';
   },
