@@ -70,11 +70,41 @@ ADMIN_API_SECRET         # /api/admin/* を叩くための共有シークレッ�
 | GET | `/api/proxy/status` | 残高・今週の回数・景品ラインナップを返す(App Proxy経由) |
 | POST | `/api/proxy/draw` | 抽選してクーポンを発行する(App Proxy経由) |
 | POST | `/api/webhooks/orders-paid` | チケット付与 + クーポン使用の記録 |
+| POST | `/api/webhooks/customers-data-request` | GDPR必須Webhook: 顧客データ開示要求の受付ログ |
+| POST | `/api/webhooks/customers-redact` | GDPR必須Webhook: 顧客データ削除要求(個人情報は保存していないため受領確認のみ) |
+| POST | `/api/webhooks/shop-redact` | GDPR必須Webhook: アプリアンインストール後48時間で顧客関連データを削除 |
 | POST | `/api/admin/reissue` | クーポン未発行のdrawを検出し再発行する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
 
 App Proxy経由のリクエストは `signature` クエリパラメータをタイミングセーフに検証し、
 `logged_in_customer_id` が空の場合は401を返す(未ログイン)。リクエストボディから
 顧客IDを受け取ることはない。
+
+### GDPR必須Webhookについて
+
+`orders/paid` のように顧客の個人情報(氏名・住所等)を含みうるWebhookトピックを購読するには、
+Shopify Dev Dashboardで「Protected customer data access」の申請が必要。この申請では
+`customers/data_request` / `customers/redact` / `shop/redact` の3つの必須コンプライアンスWebhookを
+実装済みであることが前提となるため、`shopify.app.toml` の `[[webhooks.subscriptions]]` に
+以下も追加しておくこと。
+
+```toml
+[[webhooks.subscriptions]]
+topics = ["customers/data_request"]
+uri = "https://<VercelのURL>/api/webhooks/customers-data-request"
+
+[[webhooks.subscriptions]]
+topics = ["customers/redact"]
+uri = "https://<VercelのURL>/api/webhooks/customers-redact"
+
+[[webhooks.subscriptions]]
+topics = ["shop/redact"]
+uri = "https://<VercelのURL>/api/webhooks/shop-redact"
+```
+
+当アプリは氏名・メール・住所等の個人情報を一切保存しない設計(保持するのはShopify顧客IDに
+紐づくチケット残高・抽選履歴・クーポンのみ)のため、`customers/redact` は受領確認のみ返す。
+`shop/redact` はアンインストール48時間後に顧客関連データ(`customers`/`ticket_ledger`/
+`weekly_counters`/`draws`/`coupons`)を削除する(景品マスタ等の運用設定は残す)。
 
 ## 抽選の整合性
 
