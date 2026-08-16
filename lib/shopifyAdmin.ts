@@ -54,6 +54,72 @@ function customerGID(shopifyCustomerId: string): string {
   return `gid://shopify/Customer/${shopifyCustomerId}`;
 }
 
+const METAFIELDS_SET_MUTATION = /* GraphQL */ `
+  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      metafields {
+        id
+        namespace
+        key
+      }
+      userErrors {
+        field
+        code
+        message
+      }
+    }
+  }
+`;
+
+interface MetafieldsSetPayload {
+  metafieldsSet: {
+    metafields: Array<{ id: string; namespace: string; key: string }>;
+    userErrors: Array<{ field: string[]; code: string; message: string }>;
+  };
+}
+
+export interface CustomerMetafieldInput {
+  namespace: string;
+  key: string;
+  type: string;
+  value: string;
+}
+
+/**
+ * 顧客メタフィールドをまとめて書き込む(Shopify Flowでのセグメント配信用)。
+ * 書き込み先には Settings > Custom data > Customers で同じ namespace/key の
+ * メタフィールド定義を事前に作成しておく必要がある(Flow/Segmentのピッカーに出すため)。
+ * 要 write_customers スコープ。
+ */
+export async function setCustomerMetafields(params: {
+  shopifyCustomerId: string;
+  metafields: CustomerMetafieldInput[];
+}): Promise<void> {
+  const { shopifyCustomerId, metafields } = params;
+  if (metafields.length === 0) return;
+
+  const variables = {
+    metafields: metafields.map((m) => ({
+      ownerId: customerGID(shopifyCustomerId),
+      namespace: m.namespace,
+      key: m.key,
+      type: m.type,
+      value: m.value,
+    })),
+  };
+
+  const result = await shopifyGraphQL<MetafieldsSetPayload>(METAFIELDS_SET_MUTATION, variables);
+
+  if (result.errors?.length) {
+    throw new Error(`Shopify GraphQLエラー: ${result.errors.map((e) => e.message).join(', ')}`);
+  }
+
+  const userErrors = result.data?.metafieldsSet?.userErrors ?? [];
+  if (userErrors.length > 0) {
+    throw new Error(`メタフィールド書き込みに失敗しました: ${userErrors.map((e) => e.message).join(', ')}`);
+  }
+}
+
 function variantGID(shopifyVariantId: string): string {
   return `gid://shopify/ProductVariant/${shopifyVariantId}`;
 }

@@ -19,7 +19,7 @@ Shopifyの割引コードとして発行し、決済・在庫・配送はShopify
 ### 1. Shopify側
 
 1. カスタムアプリを作成し、以下のスコープでAdmin APIアクセストークンを取得する。
-   - `write_discounts`, `read_discounts`, `read_products`, `read_orders`, `read_customers`
+   - `write_discounts`, `read_discounts`, `read_products`, `read_orders`, `read_customers`, `write_customers`(顧客メタフィールド書き込み用)
 2. App Proxyを設定する。
    - Subpath prefix: `apps`
    - Subpath: `gacha`
@@ -36,6 +36,8 @@ sql/001_schema.sql        -- テーブル定義
 sql/002_draw_function.sql -- draw_gacha(): 抽選本体(1トランザクション)
 sql/003_views.sql         -- v_return_rate / v_coupon_use_rate(運用・効果測定ビュー)
 sql/004_grant_tickets.sql -- grant_tickets(): チケット付与(Webhook用)
+sql/005_enable_rls.sql    -- 全テーブルでRLSを有効化(anon/authenticatedからのアクセスを遮断)
+sql/006_campaign_events.sql -- campaign_events: Flowセグメント配信用のイベント期間管理
 ```
 
 適用後、`prizes` と `ticket_products` にデータを投入する。`sql/seed.example.sql` にサンプルがあるので、
@@ -84,6 +86,45 @@ App Proxy経由のリクエストは `signature` クエリパラメータをタ�
   再送されるとクーポン未発行を検出して発行だけを再試行する(自己修復)。
   クライアントが再送してこない場合に備え `POST /api/admin/reissue` で
   クーポン未発行のdrawをバッチ処理できる。
+
+## Shopify Flowでのセグメント配信(顧客メタフィールド)
+
+抽選が成立するたびに、以下の顧客メタフィールド(namespace: `gacha`)を更新する
+(`lib/syncGachaMetafields.ts` → `api/proxy/draw.ts`)。抽選結果・クーポン発行そのものには
+影響しないfail-safeな副次処理として実装しており、書き込みに失敗してもAPIレスポンスは正常に返る。
+
+| キー | 型 | 内容 |
+|---|---|---|
+| `gacha.lifetime_draw_count` | number_integer | 全期間の累計抽選回数 |
+| `gacha.current_event_key` | single_line_text_field | 現在有効なイベントの`key`(無ければ空文字) |
+| `gacha.current_event_draw_count` | number_integer | 現在有効なイベント期間中の抽選回数(イベントが無ければ0) |
+
+### 事前準備
+
+1. Shopify管理画面の「設定 → カスタムデータ → 顧客」で、上表と同じ namespace/key/型のメタフィールド定義を作成する
+   (Flow・セグメントのピッカーに表示するために必須)。
+2. カスタムアプリのスコープに `write_customers` を追加する(上記参照)。
+
+### イベント期間の運用
+
+`campaign_events` テーブルに行を追加するだけでイベントを開始・終了できる(デプロイ不要)。
+
+```sql
+insert into campaign_events (key, name, starts_at, ends_at) values
+  ('summer_2026', 'サマーガチャ2026', '2026-08-01T00:00:00+09', '2026-08-31T23:59:59+09');
+```
+
+- 複数のイベントが期間的に重複している場合は `starts_at` が新しいものが優先される。
+- 期間内でも `is_active = false` にすれば手動で無効化できる。
+- イベント終了後(`ends_at` を過ぎる)は `current_event_key` / `current_event_draw_count` が自動的に空/0に戻る。
+  過去イベントの実績を保持したい場合は、`draws.created_at` と当時の `starts_at`/`ends_at` から
+  いつでも再集計できるので、終了時にSQLで別途集計・エクスポートすること。
+
+### Flow側の設定例
+
+- トリガー: 「顧客メタフィールドが更新された」(`gacha.current_event_draw_count`)
+- 条件: `current_event_key` が対象イベントの`key`と一致 かつ `current_event_draw_count` が◯回以上
+- アクション: セグメントへのタグ付け・メール配信など
 
 ## 運用
 

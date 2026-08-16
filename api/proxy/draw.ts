@@ -3,6 +3,7 @@ import { env } from '../../lib/env';
 import { verifyAppProxySignature, getLoggedInCustomerId, type QueryParams } from '../../lib/appProxyAuth';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
 import { issueCouponForDraw } from '../../lib/issueCoupon';
+import { syncGachaMetafields } from '../../lib/syncGachaMetafields';
 import type { DiscountType, PrizeInfo } from '../../lib/types';
 
 interface DrawGachaRow {
@@ -110,6 +111,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         retryable: true,
       });
     }
+  }
+
+  // Shopify Flowのセグメント配信向けに顧客メタフィールドを更新する。
+  // 抽選・クーポン発行はすでに成立しているため、ここが失敗してもレスポンスは正常に返す。
+  try {
+    await syncGachaMetafields(supabase, customerId);
+  } catch (err) {
+    console.error('gacha metafields sync failed', err);
   }
 
   return res.status(200).json({
