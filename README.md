@@ -10,8 +10,9 @@ Shopify管理画面だけを触ればよい)。景品はすべてShopifyの割�
 
 | レイヤ | 採用技術 |
 |---|---|
-| フロントエンド | `theme/templates/page.gacha.liquid`(Vanilla JS、ビルド不要) |
-| 通信経路 | Shopify App Proxy |
+| フロントエンド(購入者向け) | `theme/templates/page.gacha.liquid`(Vanilla JS、ビルド不要) |
+| フロントエンド(運用者向け) | `api/admin-ui.ts`(Shopify埋め込みアプリ画面。Vanilla JS + App Bridge、ビルド不要) |
+| 通信経路 | Shopify App Proxy(購入者向け)/ Shopify App Bridge セッショントークン(運用者向け) |
 | バックエンド | Vercel Functions (`api/`, Node.js / TypeScript) |
 | データベース | Supabase (PostgreSQL, `sql/`) |
 | クーポン発行 | Shopify Admin GraphQL API |
@@ -29,6 +30,12 @@ Shopify管理画面だけを触ればよい)。景品はすべてShopifyの割�
 3. 「ガチャチケット」商品(1回券・10回券など)を作成し、バリアントIDを控える。
 4. `orders/paid` Webhookを `https://<vercel-app>.vercel.app/api/webhooks/orders-paid` へ登録する。
 5. 景品管理用に、商品メタフィールド定義とコレクションを用意する(詳細は「景品の管理」参照)。
+6. `shopify.app.toml` を以下のように設定し、埋め込みのイベント設定画面を有効化する(詳細は
+   「イベント設定画面(埋め込みアプリ)」参照)。
+   ```toml
+   embedded = true
+   application_url = "https://<vercel-app>.vercel.app/api/admin-ui"
+   ```
 
 ### 2. Supabase側
 
@@ -55,11 +62,12 @@ sql/008_event_pity.sql    -- 天井判定を週次からイベント期間ベー
 ```
 SHOPIFY_SHOP_DOMAIN
 SHOPIFY_ADMIN_TOKEN
-SHOPIFY_API_SECRET       # App Proxy署名検証・Webhook検証に使用
+SHOPIFY_API_SECRET       # App Proxy署名検証・Webhook検証・セッショントークン検証に使用
+SHOPIFY_CLIENT_ID        # 埋め込み管理画面(api/admin-ui.ts)のApp Bridge初期化・セッショントークン検証(aud)用
 SHOPIFY_API_VERSION      # 省略時 2024-10
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
-ADMIN_API_SECRET         # /api/admin/* を叩くための共有シークレット(Bearerトークン)
+ADMIN_API_SECRET         # /api/admin/reissue, /api/admin/sync-prizes を叩くための共有シークレット(Bearerトークン)
 SHOPIFY_GACHA_COLLECTION_HANDLE  # 「ガチャ景品」コレクションのハンドル(景品同期に使用)
 ```
 
@@ -81,10 +89,14 @@ SHOPIFY_GACHA_COLLECTION_HANDLE  # 「ガチャ景品」コレクションのハ
 | POST | `/api/webhooks/shop-redact` | GDPR必須Webhook: アプリアンインストール後48時間で顧客関連データを削除 |
 | POST | `/api/admin/reissue` | クーポン未発行のdrawを検出し再発行する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
 | POST | `/api/admin/sync-prizes` | Shopifyの「ガチャ景品」コレクション+メタフィールドを`prizes`へ同期する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
+| GET / POST | `/api/admin/events` | `campaign_events`の一覧取得・作成(App Bridgeセッショントークンで認証) |
+| GET | `/api/admin-ui` | Shopify埋め込みのイベント設定画面(HTML) |
+| PATCH / DELETE | `/api/admin/events/:id` | `campaign_events`の更新・削除(App Bridgeセッショントークンで認証) |
 
 App Proxy経由のリクエストは `signature` クエリパラメータをタイミングセーフに検証し、
 `logged_in_customer_id` が空の場合は401を返す(未ログイン)。リクエストボディから
-顧客IDを受け取ることはない。
+顧客IDを受け取ることはない。`/api/admin/events*` はApp Proxyではなく、埋め込み管理画面
+(`/api/admin-ui`)からApp Bridgeのセッショントークンを使って呼ばれる(詳細は次項)。
 
 ### GDPR必須Webhookについて
 
@@ -185,6 +197,41 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
   クライアントが再送してこない場合に備え `POST /api/admin/reissue` で
   クーポン未発行のdrawをバッチ処理できる。
 
+## イベント設定画面(埋め込みアプリ)
+
+`campaign_events`(イベント期間・天井N回数)はSQLを直接書かなくても、Shopify管理画面に
+埋め込まれた設定画面から作成・編集・削除・有効/無効切り替えができる。
+
+### 仕組み
+
+- `api/admin-ui.ts` が埋め込みページのHTMLを返す。ビルドツールは使わず、Shopifyの
+  App Bridge(CDN配信の`app-bridge.js`)+ Vanilla JSのみで構成している(購入者向けの
+  `page.gacha.liquid`と同じ方針)。
+- 画面上の操作は `GET/POST /api/admin/events`・`PATCH/DELETE /api/admin/events/:id` を叩く。
+  認証はApp Bridgeが自動的に発行するセッショントークン(JWT)を`Authorization: Bearer`で送り、
+  `lib/shopifySessionAuth.ts`がShopify API SecretでHS256署名を検証する
+  (`aud`がClient ID、`dest`がストアドメインと一致するかも確認する)。
+  `/api/admin/reissue`・`/api/admin/sync-prizes`が使う`ADMIN_API_SECRET`共有シークレット方式とは
+  別の認証経路であり、ブラウザから直接叩かれるこの画面専用になっている。
+
+### 有効化手順
+
+1. Shopify Dev Dashboardで対象アプリの `shopify.app.toml` を以下のように設定する。
+   ```toml
+   embedded = true
+   application_url = "https://<vercel-app>.vercel.app/api/admin-ui"
+   ```
+2. `shopify app deploy` で反映する。
+3. Shopify管理画面の「アプリ」からこのアプリを開くと、埋め込みのイベント設定画面が表示される。
+
+### 画面でできること
+
+- イベントの新規作成(キー・表示名・開始日時・終了日時・天井N回数・有効フラグ)
+- 既存イベントの編集・有効/無効の切り替え・削除
+- 一覧で「開催中」のイベントをひと目で確認(now が starts_at〜ends_atの範囲内かで判定)
+
+デプロイ不要でSupabaseへ即時反映される点はSQL直接編集の場合と同じ。
+
 ## イベント期間管理(`campaign_events`)
 
 `campaign_events`テーブルは2つの用途を兼ねている。
@@ -211,7 +258,8 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
 
 ### イベント期間の運用
 
-`campaign_events` テーブルに行を追加するだけでイベントを開始・終了できる(デプロイ不要)。
+「イベント設定画面(埋め込みアプリ)」の画面から行うのが基本(前項参照)。SQLで直接
+操作したい場合は `campaign_events` テーブルに行を追加するだけでもよい(デプロイ不要)。
 `pity_threshold` に「イベント期間中N回引くと天井」の**N**を指定する(省略・NULLなら
 `settings.pity_threshold` がフォールバックとして使われる)。
 
@@ -239,8 +287,8 @@ insert into campaign_events (key, name, starts_at, ends_at, pity_threshold) valu
   `POST /api/admin/sync-prizes` を叩くだけで変わる(デプロイ不要。「景品の管理」参照)。
 - 景品を止めたいときはコレクションから外す(`is_active = false`になる)、
   上限を設けたいときは`gacha.stock_limit`メタフィールドを設定する。
-- 天井(確定枠抽選)のON/OFFと回数(N)は`campaign_events`テーブルのSQL操作だけで変わる
-  (デプロイ不要。「イベント期間管理」参照)。有効なイベントが無い間は天井は発生しない。
+- 天井(確定枠抽選)のON/OFFと回数(N)は、Shopify管理画面の埋め込み設定画面から変えられる
+  (デプロイ不要。「イベント設定画面(埋め込みアプリ)」参照)。有効なイベントが無い間は天井は発生しない。
 - `v_return_rate` ビューで表示還元率・実質原価率を確認できる(`sql/003_views.sql`)。
 - `v_coupon_use_rate` ビューでクーポン使用率(景品別)を確認できる。
 
