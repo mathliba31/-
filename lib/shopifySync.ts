@@ -20,17 +20,20 @@ const GACHA_COLLECTION_QUERY = /* GraphQL */ `
             }
           }
           metafields(
-            identifiers: [
-              { namespace: "gacha", key: "weight" }
-              { namespace: "gacha", key: "discount_type" }
-              { namespace: "gacha", key: "discount_value" }
-              { namespace: "gacha", key: "is_guaranteed_pool" }
-              { namespace: "gacha", key: "stock_limit" }
-              { namespace: "gacha", key: "unit_cost" }
+            first: 10
+            keys: [
+              "gacha.weight"
+              "gacha.discount_type"
+              "gacha.discount_value"
+              "gacha.is_guaranteed_pool"
+              "gacha.stock_limit"
+              "gacha.unit_cost"
             ]
           ) {
-            key
-            value
+            nodes {
+              key
+              value
+            }
           }
         }
       }
@@ -42,7 +45,7 @@ interface ProductNode {
   id: string;
   title: string;
   variants: { nodes: Array<{ id: string; price: string }> };
-  metafields: Array<{ key: string; value: string } | null>;
+  metafields: { nodes: Array<{ key: string; value: string } | null> };
 }
 
 interface CollectionQueryResult {
@@ -128,7 +131,7 @@ export async function fetchGachaCollectionProducts(
         continue;
       }
 
-      const mf = toMetafieldMap(product.metafields);
+      const mf = toMetafieldMap(product.metafields.nodes);
       const weight = Number(mf.weight);
       if (!Number.isFinite(weight) || weight < 0) {
         skipped.push({
