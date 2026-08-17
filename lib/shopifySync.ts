@@ -19,21 +19,23 @@ const GACHA_COLLECTION_QUERY = /* GraphQL */ `
               price
             }
           }
-          metafields(
-            first: 10
-            keys: [
-              "gacha.weight"
-              "gacha.discount_type"
-              "gacha.discount_value"
-              "gacha.is_guaranteed_pool"
-              "gacha.stock_limit"
-              "gacha.unit_cost"
-            ]
-          ) {
-            nodes {
-              key
-              value
-            }
+          weight: metafield(namespace: "gacha", key: "weight") {
+            value
+          }
+          discountType: metafield(namespace: "gacha", key: "discount_type") {
+            value
+          }
+          discountValue: metafield(namespace: "gacha", key: "discount_value") {
+            value
+          }
+          isGuaranteedPool: metafield(namespace: "gacha", key: "is_guaranteed_pool") {
+            value
+          }
+          stockLimit: metafield(namespace: "gacha", key: "stock_limit") {
+            value
+          }
+          unitCost: metafield(namespace: "gacha", key: "unit_cost") {
+            value
           }
         }
       }
@@ -45,7 +47,12 @@ interface ProductNode {
   id: string;
   title: string;
   variants: { nodes: Array<{ id: string; price: string }> };
-  metafields: { nodes: Array<{ key: string; value: string } | null> };
+  weight: { value: string } | null;
+  discountType: { value: string } | null;
+  discountValue: { value: string } | null;
+  isGuaranteedPool: { value: string } | null;
+  stockLimit: { value: string } | null;
+  unitCost: { value: string } | null;
 }
 
 interface CollectionQueryResult {
@@ -79,14 +86,6 @@ const VALID_DISCOUNT_TYPES: DiscountType[] = ['free_product', 'amount_off', 'per
 
 function gidToId(gid: string): string {
   return gid.split('/').pop() ?? gid;
-}
-
-function toMetafieldMap(metafields: Array<{ key: string; value: string } | null>): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const m of metafields) {
-    if (m) map[m.key] = m.value;
-  }
-  return map;
 }
 
 /**
@@ -131,8 +130,7 @@ export async function fetchGachaCollectionProducts(
         continue;
       }
 
-      const mf = toMetafieldMap(product.metafields.nodes);
-      const weight = Number(mf.weight);
+      const weight = Number(product.weight?.value);
       if (!Number.isFinite(weight) || weight < 0) {
         skipped.push({
           productId: gidToId(product.id),
@@ -142,12 +140,12 @@ export async function fetchGachaCollectionProducts(
         continue;
       }
 
-      const discountType = (mf.discount_type || 'free_product') as DiscountType;
+      const discountType = (product.discountType?.value || 'free_product') as DiscountType;
       if (!VALID_DISCOUNT_TYPES.includes(discountType)) {
         skipped.push({
           productId: gidToId(product.id),
           title: product.title,
-          reason: `gacha.discount_type の値が不正: ${mf.discount_type}`,
+          reason: `gacha.discount_type の値が不正: ${product.discountType?.value}`,
         });
         continue;
       }
@@ -158,10 +156,10 @@ export async function fetchGachaCollectionProducts(
         listPrice: Math.round(Number(variant.price) || 0),
         weight,
         discountType,
-        discountValue: Number(mf.discount_value) || 0,
-        isGuaranteedPool: mf.is_guaranteed_pool === 'true',
-        stockLimit: mf.stock_limit ? Number(mf.stock_limit) : null,
-        unitCost: Number(mf.unit_cost) || 0,
+        discountValue: Number(product.discountValue?.value) || 0,
+        isGuaranteedPool: product.isGuaranteedPool?.value === 'true',
+        stockLimit: product.stockLimit?.value ? Number(product.stockLimit.value) : null,
+        unitCost: Number(product.unitCost?.value) || 0,
       });
     }
 
