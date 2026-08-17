@@ -150,6 +150,19 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
 レスポンスに`upserted`(反映件数)・`deactivated`(無効化件数)・`skipped`(メタフィールド未設定などでスキップした商品と理由)・`failures`が返る。
 商品を追加・変更したら、この同期を実行するだけで反映される(デプロイ不要)。
 
+### 天井(`is_guaranteed_pool`)を期間限定にしたい場合(手動運用)
+
+`is_guaranteed_pool`は商品に対する固定フラグで、日付の自動切り替えには対応していない。
+「10/10〜10/20だけ天井対象にする」のような期間限定運用は、以下の手順で手動で行う。
+
+1. 開始日に、対象商品の `gacha.is_guaranteed_pool` をShopify管理画面で `true` にする
+2. `POST /api/admin/sync-prizes` を実行して反映する
+3. 終了日に `false` に戻し、再度 `POST /api/admin/sync-prizes` を実行する
+
+切り替え忘れに注意。頻繁に期間限定運用を行う場合は、`gacha.guaranteed_pool_starts_at`/
+`gacha.guaranteed_pool_ends_at`(日付型)メタフィールドを追加して`draw_gacha()`側で
+自動判定する拡張も可能(未実装)。
+
 ## 抽選の整合性
 
 - `draw_gacha()`(`sql/002_draw_function.sql`)が `customers` 行をロックしたうえで
