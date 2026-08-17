@@ -2,7 +2,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { env } from '../../lib/env';
 import { verifyAppProxySignature, getLoggedInCustomerId, type QueryParams } from '../../lib/appProxyAuth';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
-import { computeWeekStart } from '../../lib/week';
+
+interface ActiveCampaignEventRow {
+  key: string;
+  name: string;
+  starts_at: string;
+  ends_at: string;
+  pity_threshold: number | null;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') {
@@ -23,27 +30,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = getSupabaseAdmin();
 
-  const [{ data: settingsRows }, { data: customerRow }] = await Promise.all([
-    supabase
-      .from('settings')
-      .select('key, value')
-      .in('key', ['pity_threshold', 'week_start_weekday', 'coupon_valid_days']),
+  const [{ data: settingsRows }, { data: customerRow }, { data: activeEventRows }] = await Promise.all([
+    supabase.from('settings').select('key, value').in('key', ['pity_threshold', 'coupon_valid_days']),
     supabase.from('customers').select('ticket_balance').eq('shopify_customer_id', customerId).maybeSingle(),
+    supabase.rpc('get_active_campaign_event'),
   ]);
 
   const settings = Object.fromEntries((settingsRows ?? []).map((r) => [r.key, Number(r.value)]));
-  const pityThreshold = settings.pity_threshold ?? 7;
-  const weekStartWeekday = settings.week_start_weekday ?? 1;
   const couponValidDays = settings.coupon_valid_days ?? 14;
-  const weekStart = computeWeekStart(new Date(), weekStartWeekday);
+  const activeEvent = ((activeEventRows as ActiveCampaignEventRow[] | null) ?? [])[0] ?? null;
 
-  const [{ data: weeklyRow }, { data: prizeRows }, { data: couponRows }] = await Promise.all([
-    supabase
-      .from('weekly_counters')
-      .select('draw_count, guaranteed_granted')
+  let eventDrawCount = 0;
+  let eventPityThreshold: number | null = null;
+  if (activeEvent) {
+    eventPityThreshold = activeEvent.pity_threshold ?? settings.pity_threshold ?? 7;
+    const { count } = await supabase
+      .from('draws')
+      .select('id', { count: 'exact', head: true })
       .eq('shopify_customer_id', customerId)
-      .eq('week_start', weekStart)
-      .maybeSingle(),
+      .gte('created_at', activeEvent.starts_at)
+      .lte('created_at', activeEvent.ends_at);
+    eventDrawCount = count ?? 0;
+  }
+
+  const [{ data: prizeRows }, { data: couponRows }] = await Promise.all([
     supabase
       .from('prizes')
       .select('name, weight, list_price, is_guaranteed_pool')
@@ -59,9 +69,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const prizes = prizeRows ?? [];
   const totalWeight = prizes.reduce((sum, p) => sum + p.weight, 0);
-
-  const weeklyCount = weeklyRow?.draw_count ?? 0;
-  const remaining = Math.max(pityThreshold - weeklyCount, 0);
 
   type CouponJoinRow = {
     code: string;
@@ -84,12 +91,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({
     ticket_balance: customerRow?.ticket_balance ?? 0,
     coupon_valid_days: couponValidDays,
-    weekly: {
-      count: weeklyCount,
-      threshold: pityThreshold,
-      remaining,
-      granted: weeklyRow?.guaranteed_granted ?? false,
-    },
+    event: activeEvent
+      ? {
+          key: activeEvent.key,
+          name: activeEvent.name,
+          count: eventDrawCount,
+          threshold: eventPityThreshold,
+          remaining: eventPityThreshold !== null ? Math.max(eventPityThreshold - eventDrawCount, 0) : null,
+        }
+      : null,
     prizes: prizes.map((p) => ({
       name: p.name,
       probability: totalWeight > 0 ? p.weight / totalWeight : 0,

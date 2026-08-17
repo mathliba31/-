@@ -42,6 +42,7 @@ sql/004_grant_tickets.sql -- grant_tickets(): チケット付与(Webhook用)
 sql/005_enable_rls.sql    -- 全テーブルでRLSを有効化(anon/authenticatedからのアクセスを遮断)
 sql/006_campaign_events.sql -- campaign_events: Flowセグメント配信用のイベント期間管理
 sql/007_prizes_unique_variant.sql -- prizesにshopify_variant_idの一意制約を追加(景品同期のupsert用)
+sql/008_event_pity.sql    -- 天井判定を週次からイベント期間ベースに変更(draw_gacha()を更新)
 ```
 
 適用後、`ticket_products`(チケット商品の対応表)にデータを投入する。`prizes`(景品マスタ)は
@@ -72,7 +73,7 @@ SHOPIFY_GACHA_COLLECTION_HANDLE  # 「ガチャ景品」コレクションのハ
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| GET | `/api/proxy/status` | 残高・今週の回数・景品ラインナップを返す(App Proxy経由) |
+| GET | `/api/proxy/status` | 残高・開催中イベントの天井進捗・景品ラインナップを返す(App Proxy経由) |
 | POST | `/api/proxy/draw` | 抽選してクーポンを発行する(App Proxy経由) |
 | POST | `/api/webhooks/orders-paid` | チケット付与 + クーポン使用の記録 |
 | POST | `/api/webhooks/customers-data-request` | GDPR必須Webhook: 顧客データ開示要求の受付ログ |
@@ -150,35 +151,51 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
 レスポンスに`upserted`(反映件数)・`deactivated`(無効化件数)・`skipped`(メタフィールド未設定などでスキップした商品と理由)・`failures`が返る。
 商品を追加・変更したら、この同期を実行するだけで反映される(デプロイ不要)。
 
-### 天井(`is_guaranteed_pool`)を期間限定にしたい場合(手動運用)
+### 天井(確定枠抽選)の期間限定について
 
-`is_guaranteed_pool`は商品に対する固定フラグで、日付の自動切り替えには対応していない。
-「10/10〜10/20だけ天井対象にする」のような期間限定運用は、以下の手順で手動で行う。
+天井の「いつ・何回で発動するか」と「発動したら何が対象になるか」は別々の仕組みになっている。
 
-1. 開始日に、対象商品の `gacha.is_guaranteed_pool` をShopify管理画面で `true` にする
-2. `POST /api/admin/sync-prizes` を実行して反映する
-3. 終了日に `false` に戻し、再度 `POST /api/admin/sync-prizes` を実行する
+- **いつ・何回で発動するか**: `campaign_events`(後述「Shopify Flowでのセグメント配信」参照)で
+  自動制御される。**有効なイベントが1件も無い間は天井そのものが発生しない**。イベント期間中のみ、
+  そのイベントの`pity_threshold`(未設定なら`settings.pity_threshold`)回引くごとに天井が発動する。
+  日付はイベントの`starts_at`/`ends_at`で管理するため、`POST /api/admin/sync-prizes`の実行は不要
+  (`campaign_events`テーブルへのSQL操作のみで完結する)。
+- **発動したら何が対象になるか**: 天井発動時に抽選対象となる景品は`is_guaranteed_pool = true`の
+  商品群。こちらは商品に対する固定フラグで、日付の自動切り替えには対応していない。
+  「このイベント期間だけこの景品を天井対象にしたい」場合は、以下を手動で行う。
 
-切り替え忘れに注意。頻繁に期間限定運用を行う場合は、`gacha.guaranteed_pool_starts_at`/
-`gacha.guaranteed_pool_ends_at`(日付型)メタフィールドを追加して`draw_gacha()`側で
-自動判定する拡張も可能(未実装)。
+  1. イベント開始前に、対象商品の `gacha.is_guaranteed_pool` をShopify管理画面で `true` にする
+  2. `POST /api/admin/sync-prizes` を実行して反映する
+  3. イベント終了後に `false` に戻し、再度 `POST /api/admin/sync-prizes` を実行する
+
+  切り替え忘れに注意。頻繁に景品側も入れ替える場合は、`gacha.guaranteed_pool_starts_at`/
+  `gacha.guaranteed_pool_ends_at`(日付型)メタフィールドを追加して同期時に判定する拡張も
+  可能(未実装)。
 
 ## 抽選の整合性
 
-- `draw_gacha()`(`sql/002_draw_function.sql`)が `customers` 行をロックしたうえで
-  残高チェック・週次カウンタ更新・天井判定・重み付き抽選・残高減算・ログ記録までを
-  1トランザクションで行う。
+- `draw_gacha()`(`sql/002_draw_function.sql` → `sql/008_event_pity.sql`で更新)が
+  `customers` 行をロックしたうえで残高チェック・天井判定(イベント期間中の`draws`集計)・
+  重み付き抽選・残高減算・ログ記録までを1トランザクションで行う。`customers`行のロックにより
+  同一顧客の並行リクエストは直列化されるため、天井判定用の専用カウンタテーブルは使わず
+  `draws`テーブルを直接集計している。
 - Shopifyでのクーポン発行(DB外の処理)が失敗しても、抽選成立済みのチケットは
   返却しない(二重消費防止)。`POST /api/proxy/draw` は同じ `idempotency_key` で
   再送されるとクーポン未発行を検出して発行だけを再試行する(自己修復)。
   クライアントが再送してこない場合に備え `POST /api/admin/reissue` で
   クーポン未発行のdrawをバッチ処理できる。
 
-## Shopify Flowでのセグメント配信(顧客メタフィールド)
+## イベント期間管理(`campaign_events`)
 
-抽選が成立するたびに、以下の顧客メタフィールド(namespace: `gacha`)を更新する
-(`lib/syncGachaMetafields.ts` → `api/proxy/draw.ts`)。抽選結果・クーポン発行そのものには
-影響しないfail-safeな副次処理として実装しており、書き込みに失敗してもAPIレスポンスは正常に返る。
+`campaign_events`テーブルは2つの用途を兼ねている。
+
+1. **天井(確定枠抽選)の自動制御**: `draw_gacha()`が「現在有効なイベント」の期間中の
+   抽選回数を数え、`pity_threshold`回に達するとその回を天井にする。有効なイベントが
+   無い間は天井が発生しない(「景品の管理」の「天井(確定枠抽選)の期間限定について」参照)。
+2. **Shopify Flowでのセグメント配信**: 抽選が成立するたびに、以下の顧客メタフィールド
+   (namespace: `gacha`)を更新する(`lib/syncGachaMetafields.ts` → `api/proxy/draw.ts`)。
+   抽選結果・クーポン発行そのものには影響しないfail-safeな副次処理として実装しており、
+   書き込みに失敗してもAPIレスポンスは正常に返る。
 
 | キー | 型 | 内容 |
 |---|---|---|
@@ -195,15 +212,18 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
 ### イベント期間の運用
 
 `campaign_events` テーブルに行を追加するだけでイベントを開始・終了できる(デプロイ不要)。
+`pity_threshold` に「イベント期間中N回引くと天井」の**N**を指定する(省略・NULLなら
+`settings.pity_threshold` がフォールバックとして使われる)。
 
 ```sql
-insert into campaign_events (key, name, starts_at, ends_at) values
-  ('summer_2026', 'サマーガチャ2026', '2026-08-01T00:00:00+09', '2026-08-31T23:59:59+09');
+insert into campaign_events (key, name, starts_at, ends_at, pity_threshold) values
+  ('summer_2026', 'サマーガチャ2026', '2026-08-01T00:00:00+09', '2026-08-31T23:59:59+09', 10);
 ```
 
 - 複数のイベントが期間的に重複している場合は `starts_at` が新しいものが優先される。
-- 期間内でも `is_active = false` にすれば手動で無効化できる。
-- イベント終了後(`ends_at` を過ぎる)は `current_event_key` / `current_event_draw_count` が自動的に空/0に戻る。
+- 期間内でも `is_active = false` にすれば手動で無効化できる(天井も即座に停止する)。
+- イベント終了後(`ends_at` を過ぎる)は、天井が発生しなくなり、
+  `current_event_key` / `current_event_draw_count` も自動的に空/0に戻る。
   過去イベントの実績を保持したい場合は、`draws.created_at` と当時の `starts_at`/`ends_at` から
   いつでも再集計できるので、終了時にSQLで別途集計・エクスポートすること。
 
@@ -219,6 +239,8 @@ insert into campaign_events (key, name, starts_at, ends_at) values
   `POST /api/admin/sync-prizes` を叩くだけで変わる(デプロイ不要。「景品の管理」参照)。
 - 景品を止めたいときはコレクションから外す(`is_active = false`になる)、
   上限を設けたいときは`gacha.stock_limit`メタフィールドを設定する。
+- 天井(確定枠抽選)のON/OFFと回数(N)は`campaign_events`テーブルのSQL操作だけで変わる
+  (デプロイ不要。「イベント期間管理」参照)。有効なイベントが無い間は天井は発生しない。
 - `v_return_rate` ビューで表示還元率・実質原価率を確認できる(`sql/003_views.sql`)。
 - `v_coupon_use_rate` ビューでクーポン使用率(景品別)を確認できる。
 
@@ -227,7 +249,7 @@ insert into campaign_events (key, name, starts_at, ends_at) values
 ```bash
 npm install
 npm run typecheck  # 型チェック
-npm test        # 単体テスト(署名検証・週計算)
+npm test        # 単体テスト(署名検証)
 ```
 
 ## テストで確認すべき項目(手動含む)
@@ -237,9 +259,10 @@ npm test        # 単体テスト(署名検証・週計算)
 - [ ] 残高0で引こうとすると400が返り、残高が変動しない
 - [ ] 同じ `idempotency_key` で2回叩いても抽選は1回しか成立しない
 - [ ] ボタン連打で残高が2以上減らない
-- [ ] 7回目に必ず `is_guaranteed_pool` の景品が出る
-- [ ] 8回目以降は通常抽選に戻る
-- [ ] 翌週の月曜にカウンタがリセットされる
+- [ ] 有効なイベントが無い間は天井が一切発生しない
+- [ ] イベント期間中、`pity_threshold`回目に必ず `is_guaranteed_pool` の景品が出る
+- [ ] 同一イベント内でその後(N+1回目以降)は通常抽選に戻る
+- [ ] イベントを`is_active = false`にすると即座に天井が停止する
 - [ ] `stock_limit` に達した景品が抽選対象から外れる
 - [ ] 発行されたコードを当選者以外が使えない
 - [ ] 同じコードを2回使えない

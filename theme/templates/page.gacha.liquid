@@ -87,9 +87,8 @@
 
     <ul class="gacha-notice-list">
       <li>必ず何らかの景品が当たります(ハズレなし・全数当選)。</li>
-      <li>週に <strong id="gacha-notice-threshold">7</strong> 回引くと、その回は上位景品(確定枠)からの当選になります。</li>
+      <li id="gacha-notice-pity" hidden>開催中のイベント期間中に<strong id="gacha-notice-threshold"></strong>回引くと、その回は上位景品(確定枠)からの当選になります。</li>
       <li>クーポンの有効期限は発行から<strong id="gacha-notice-valid-days">14</strong>日間で、1回のみ使用できます。</li>
-      <li>週の集計は毎週月曜0時にリセットされます。</li>
       <li>購入済みのチケットは払い戻しできません。</li>
     </ul>
   </section>
@@ -280,6 +279,7 @@
     errorMessage: document.getElementById("gacha-error-message"),
     errorRetryBtn: document.getElementById("gacha-error-retry-btn"),
     prizeTableBody: document.getElementById("gacha-prize-table-body"),
+    noticePity: document.getElementById("gacha-notice-pity"),
     noticeThreshold: document.getElementById("gacha-notice-threshold"),
     noticeValidDays: document.getElementById("gacha-notice-valid-days"),
   };
@@ -335,8 +335,15 @@
 
   function renderStatus(status) {
     renderPrizeTable(status.prizes);
-    if (els.noticeThreshold) els.noticeThreshold.textContent = status.weekly.threshold;
     if (els.noticeValidDays) els.noticeValidDays.textContent = status.coupon_valid_days;
+
+    var event = status.event;
+    if (els.noticePity) {
+      els.noticePity.hidden = !event || event.threshold === null;
+    }
+    if (event && event.threshold !== null && els.noticeThreshold) {
+      els.noticeThreshold.textContent = event.threshold;
+    }
 
     if (status.ticket_balance <= 0) {
       showOnly(els.zero);
@@ -344,8 +351,8 @@
     }
 
     els.balanceValue.textContent = status.ticket_balance;
-    if (status.weekly.remaining > 0) {
-      els.pityText.textContent = "今週あと" + status.weekly.remaining + "回で確定枠!";
+    if (event && event.remaining !== null && event.remaining > 0) {
+      els.pityText.textContent = "開催中のイベントであと" + event.remaining + "回で確定枠!";
     } else {
       els.pityText.textContent = "";
     }

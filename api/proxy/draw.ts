@@ -16,8 +16,9 @@ interface DrawGachaRow {
   list_price: number;
   is_guaranteed: boolean;
   ticket_balance: number;
-  weekly_count: number;
-  weekly_threshold: number;
+  event_key: string | null;
+  event_draw_count: number;
+  event_pity_threshold: number | null;
   already_existed: boolean;
 }
 
@@ -127,10 +128,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     coupon: { code: coupon.code, expires_at: coupon.expiresAt },
     checkout_url: buildCheckoutUrl(coupon.code),
     ticket_balance: row.ticket_balance,
-    weekly: {
-      count: row.weekly_count,
-      threshold: row.weekly_threshold,
-      remaining: Math.max(row.weekly_threshold - row.weekly_count, 0),
-    },
+    event: row.event_key
+      ? {
+          key: row.event_key,
+          count: row.event_draw_count,
+          threshold: row.event_pity_threshold,
+          remaining:
+            row.event_pity_threshold !== null
+              ? Math.max(row.event_pity_threshold - row.event_draw_count, 0)
+              : null,
+        }
+      : null,
   });
 }
