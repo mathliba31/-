@@ -73,13 +73,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const orderId = String(payload.id);
   const customerId = payload.customer?.id != null ? String(payload.customer.id) : null;
 
-  // TODO(debug): チケット未付与の原因調査用の一時ログ。原因判明後に削除する。
-  console.log('orders-paid debug', {
-    orderId,
-    customerId,
-    lineItems: (payload.line_items ?? []).map((i) => ({ variant_id: i.variant_id, quantity: i.quantity })),
-  });
-
   // 3. チケット付与
   if (customerId && payload.line_items?.length) {
     const { data: ticketProducts } = await supabase
@@ -96,8 +89,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         totalTickets += perUnit * item.quantity;
       }
     }
-
-    console.log('orders-paid debug: totalTickets', totalTickets);
 
     if (totalTickets > 0) {
       const { error: grantError } = await supabase.rpc('grant_tickets', {
