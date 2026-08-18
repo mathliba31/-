@@ -2,9 +2,13 @@
   ガチャページテンプレート。
   - 抽選は行わない。/apps/gacha/status と /apps/gacha/draw (App Proxy 経由でVercel Functionsへ) を叩くだけ。
   - React等のビルドツールは使わず、単一HTML + インラインJSで完結させる。
-  - チケット購入導線のURLは下の ticket_product_url を実際の商品ページに差し替えること。
+  - チケット購入は商品ページに遷移させず、このページ内のフォームから直接 /cart/add → チェックアウトへ
+    進めるようにしている(商品ページ側のテーマ設定に数量セレクターが無くても複数枚購入できるようにするため)。
+  - チケット商品のハンドルが変わった場合はここを更新すること。
 {% endcomment %}
-{% assign ticket_product_url = '/products/gacha-ticket' %}
+{% assign ticket_product_handle = 'gacha-ticket' %}
+{% assign ticket_product = all_products[ticket_product_handle] %}
+{% assign ticket_variant = ticket_product.selected_or_first_available_variant %}
 
 <div id="gacha-app" class="gacha-app">
   <h1 class="gacha-title">ガチャ</h1>
@@ -16,8 +20,7 @@
 
     <div id="gacha-state-zero" class="gacha-panel gacha-panel--center" hidden>
       <p class="gacha-balance">チケット残高: <strong>0枚</strong></p>
-      <p>ガチャを引くにはチケットが必要です。</p>
-      <a class="gacha-btn gacha-btn--primary" href="{{ ticket_product_url }}">チケットを購入する</a>
+      <p>ガチャを引くにはチケットが必要です。下記からチケットを購入してください。</p>
     </div>
 
     <div id="gacha-state-ready" class="gacha-panel" hidden>
@@ -58,6 +61,24 @@
       <button id="gacha-error-retry-btn" type="button" class="gacha-btn gacha-btn--secondary">
         もう一度読み込む
       </button>
+    </div>
+
+    <div id="gacha-ticket-purchase" class="gacha-panel gacha-panel--center">
+      <h2 class="gacha-ticket-purchase-title">チケットを購入する</h2>
+      {% if ticket_variant %}
+        <form method="post" action="{{ routes.cart_add_url }}" class="gacha-ticket-form">
+          <input type="hidden" name="id" value="{{ ticket_variant.id }}">
+          <input type="hidden" name="return_to" value="/checkout">
+          <div class="gacha-ticket-qty-row">
+            <label for="gacha-ticket-qty">枚数</label>
+            <input type="number" name="quantity" id="gacha-ticket-qty" value="1" min="1" max="99" step="1" inputmode="numeric">
+            <span class="gacha-ticket-unit-price">(1枚 {{ ticket_variant.price | money }})</span>
+          </div>
+          <button type="submit" class="gacha-btn gacha-btn--primary">まとめて購入する</button>
+        </form>
+      {% else %}
+        <p class="gacha-error-message">チケット商品が見つかりません。管理者にお問い合わせください。</p>
+      {% endif %}
     </div>
   {% else %}
     <div class="gacha-panel gacha-panel--center">
@@ -192,6 +213,43 @@
   .gacha-btn--large {
     font-size: 17px;
     padding: 16px 20px;
+  }
+  .gacha-ticket-purchase-title {
+    font-size: 15px;
+    margin: 0 0 14px;
+  }
+  .gacha-ticket-form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .gacha-ticket-qty-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .gacha-ticket-qty-row label {
+    font-size: 13px;
+    color: #444;
+  }
+  .gacha-ticket-qty-row input[type="number"] {
+    width: 72px;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 14px;
+    text-align: center;
+  }
+  .gacha-ticket-unit-price {
+    font-size: 12px;
+    color: #888;
+  }
+  .gacha-ticket-form .gacha-btn {
+    width: auto;
+    padding: 12px 28px;
   }
   .gacha-result-label {
     color: #ff9f1a;
