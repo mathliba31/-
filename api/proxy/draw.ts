@@ -22,8 +22,9 @@ interface DrawGachaRow {
   already_existed: boolean;
 }
 
-function buildCheckoutUrl(code: string): string {
-  return `https://${env.shopifyShopDomain}/discount/${encodeURIComponent(code)}`;
+function buildCheckoutUrl(code: string, variantId: string): string {
+  const redirect = encodeURIComponent(`/cart/${variantId}:1`);
+  return `https://${env.shopifyShopDomain}/discount/${encodeURIComponent(code)}?redirect=${redirect}`;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -126,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     prize: { name: prize.name, list_price: prize.listPrice },
     is_guaranteed: row.is_guaranteed,
     coupon: { code: coupon.code, expires_at: coupon.expiresAt },
-    checkout_url: buildCheckoutUrl(coupon.code),
+    checkout_url: buildCheckoutUrl(coupon.code, prize.shopifyVariantId),
     ticket_balance: row.ticket_balance,
     event: row.event_key
       ? {
