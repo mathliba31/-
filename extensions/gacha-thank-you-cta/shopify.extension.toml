@@ -1,0 +1,33 @@
+# Learn more about configuring your checkout UI extension:
+# https://shopify.dev/docs/api/checkout-ui-extensions/latest/configuration
+#
+# 注: このファイルはローカルのShopify CLIプロジェクト(gacha-shopify-config)にある
+# 実体の参照用コピー。デプロイはローカル側の `shopify app deploy` で行う。
+
+# The version of APIs your extension will receive. Learn more:
+# https://shopify.dev/docs/api/usage/versioning
+api_version = "2025-07"
+
+[[extensions]]
+name = "gacha-thank-you-cta"
+handle = "gacha-thank-you-cta"
+type = "ui_extension"
+uid = "eae807df-5098-bfbe-badb-6760fd6481a6abfd89d2"
+
+# Controls where in Shopify your extension will be injected,
+# and the file that contains your extension's source code. Learn more:
+# https://shopify.dev/docs/api/checkout-ui-extensions/latest/extension-targets-overview
+
+[[extensions.targeting]]
+module = "./src/Checkout.jsx"
+target = "purchase.thank-you.block.render"
+
+# マーチャントがチェックアウトエディタでブロックを配置する際に入力する設定項目。
+# ガチャページのURLをコードにハードコードせず、ここから注入する。
+
+[extensions.settings]
+[[extensions.settings.fields]]
+key = "gacha_page_url"
+type = "single_line_text_field"
+name = "ガチャページのURL"
+description = "決済完了後に案内するガチャページの完全なURL(例: https://your-shop.myshopify.com/pages/gacha)"
