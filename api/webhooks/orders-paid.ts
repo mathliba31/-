@@ -3,6 +3,7 @@ import { env } from '../../lib/env';
 import { verifyWebhookHmac } from '../../lib/webhookAuth';
 import { readRawBody } from '../../lib/rawBody';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
+import { sendAlertEmail } from '../../lib/alertEmail';
 
 // HMAC検証には生ボディが必要なため、Vercelの自動JSONパースを無効化する。
 export const config = {
@@ -59,6 +60,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ status: 'already_processed' });
       }
       console.error('webhook_events insert error', insertEventError);
+      await sendAlertEmail(
+        'orders/paid Webhookの記録に失敗',
+        `webhook_eventsへの記録に失敗しました。\nevent_id: ${eventId}\nerror: ${insertEventError.message}`,
+      );
       return res.status(500).json({ error: 'internal_error' });
     }
   }
@@ -98,6 +103,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       if (grantError) {
         console.error('grant_tickets rpc error', grantError);
+        await sendAlertEmail(
+          'チケット付与に失敗(要手動対応)',
+          `注文の支払いは完了していますが、チケット付与に失敗しました。\n` +
+            `注文ID: ${orderId}\n顧客ID: ${customerId}\n付与予定数: ${totalTickets}\nerror: ${grantError.message}`,
+        );
         return res.status(500).json({ error: 'internal_error' });
       }
     }
@@ -114,6 +124,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .is('used_at', null);
     if (updateError) {
       console.error('coupon usage update error', updateError);
+      await sendAlertEmail(
+        'クーポン使用記録の更新に失敗',
+        `クーポンコード: ${dc.code}\n注文ID: ${orderId}\nerror: ${updateError.message}`,
+      );
     }
   }
 

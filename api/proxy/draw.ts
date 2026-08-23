@@ -4,6 +4,7 @@ import { verifyAppProxySignature, getLoggedInCustomerId, type QueryParams } from
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
 import { issueCouponForDraw } from '../../lib/issueCoupon';
 import { syncGachaMetafields } from '../../lib/syncGachaMetafields';
+import { sendAlertEmail } from '../../lib/alertEmail';
 import type { DiscountType, PrizeInfo } from '../../lib/types';
 
 interface DrawGachaRow {
@@ -62,9 +63,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'insufficient_balance' });
     }
     if (error.message.includes('NO_PRIZE_AVAILABLE')) {
+      await sendAlertEmail(
+        '景品在庫切れで抽選不能(要対応)',
+        `顧客ID: ${customerId}\n選出可能な景品が無いため抽選が成立しませんでした。プライズ設定を確認してください。`,
+      );
       return res.status(500).json({ error: 'no_prize_available' });
     }
     console.error('draw_gacha rpc error', error);
+    await sendAlertEmail('ガチャ抽選処理でエラー', `顧客ID: ${customerId}\nerror: ${error.message}`);
     return res.status(500).json({ error: 'internal_error' });
   }
 
@@ -104,6 +110,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       coupon = { code: issued.code, expiresAt: issued.expiresAt };
     } catch (err) {
       console.error('coupon issuance failed', err);
+      await sendAlertEmail(
+        'クーポン発行に失敗(要対応)',
+        `顧客はチケットを消費済みですがクーポンが未発行です。\n` +
+          `顧客ID: ${customerId}\n抽選ID: ${row.draw_id}\n` +
+          `error: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
       // 抽選は既に成立済み。チケットは返却しない(二重消費防止)。
       // クライアントは同じ idempotency_key で再試行することでクーポン発行だけを再実行できる。
       return res.status(502).json({
