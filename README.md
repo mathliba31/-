@@ -247,7 +247,7 @@ curl -X POST https://<VercelのURL>/api/admin/sync-prizes \
 | キー | 型 | 内容 |
 |---|---|---|
 | `gacha.lifetime_draw_count` | number_integer | 全期間の累計抽選回数 |
-| `gacha.current_event_key` | single_line_text_field | 現在有効なイベントの`key`(無ければ空文字) |
+| `gacha.current_event_key` | single_line_text_field | 現在有効なイベントの`key`(無ければ`"none"`。Shopifyは空文字の書き込みを許可しないため) |
 | `gacha.current_event_draw_count` | number_integer | 現在有効なイベント期間中の抽選回数(イベントが無ければ0) |
 
 ### 事前準備
@@ -271,7 +271,7 @@ insert into campaign_events (key, name, starts_at, ends_at, pity_threshold) valu
 - 複数のイベントが期間的に重複している場合は `starts_at` が新しいものが優先される。
 - 期間内でも `is_active = false` にすれば手動で無効化できる(天井も即座に停止する)。
 - イベント終了後(`ends_at` を過ぎる)は、天井が発生しなくなり、
-  `current_event_key` / `current_event_draw_count` も自動的に空/0に戻る。
+  `current_event_key` / `current_event_draw_count` も自動的に`"none"`/0に戻る。
   過去イベントの実績を保持したい場合は、`draws.created_at` と当時の `starts_at`/`ends_at` から
   いつでも再集計できるので、終了時にSQLで別途集計・エクスポートすること。
 

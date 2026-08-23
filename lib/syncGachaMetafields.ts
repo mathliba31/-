@@ -14,7 +14,9 @@ interface ActiveCampaignEvent {
  * 顧客メタフィールド(namespace: "gacha")へ反映する。
  * Shopify Flowでのセグメント配信を主目的としており、以下のキーを書き込む:
  *   - gacha.lifetime_draw_count      (number_integer)  全期間の累計回数
- *   - gacha.current_event_key        (single_line_text_field) 現在有効なイベントのkey(無ければ空文字)
+ *   - gacha.current_event_key        (single_line_text_field) 現在有効なイベントのkey(無ければ"none")
+ *     ※ Shopifyのメタフィールドは空文字列の書き込みを許可しないため、イベント非開催中は
+ *       空文字ではなく固定値"none"を書き込む(Flow側では "current_event_key が none ではない" で判定する)。
  *   - gacha.current_event_draw_count (number_integer)  そのイベント期間中の回数(イベントが無ければ0)
  *
  * 失敗しても抽選結果・クーポン発行そのものには影響させない(呼び出し側でtry/catchすること)。
@@ -35,7 +37,7 @@ export async function syncGachaMetafields(supabase: SupabaseClient, shopifyCusto
   }
   const activeEvent = (activeEventRows as ActiveCampaignEvent[] | null)?.[0] ?? null;
 
-  let currentEventKey = '';
+  let currentEventKey = 'none';
   let currentEventDrawCount = 0;
 
   if (activeEvent) {
