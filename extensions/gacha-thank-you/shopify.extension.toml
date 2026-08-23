@@ -1,0 +1,36 @@
+# Thank youページ(決済完了直後)にガチャページへの導線を出すCheckout UI拡張。
+#
+# 注: このファイルはローカルのShopify CLIプロジェクト(gacha-shopify-config)にある
+# 実体の参照用コピー。デプロイはローカル側の `shopify app deploy` で行う。
+#
+# 旧 gacha-thank-you-cta では、管理画面上は正しく配置されているのに
+# チェックアウトのランタイムが拡張バンドルを一度も取得しない(＝拡張が
+# mount対象として解決されない)状態が、複数ストア・再インストール後も再現した。
+# Shopifyサポートの助言に沿って、以下を満たす構成で作り直している:
+#   - ターゲットは purchase.thank-you.block.render の1つだけ
+#   - モジュール名はターゲット専用の名前(ThankYou.jsx)にする
+#   - 静的テキスト描画に不要な capabilities / metafields は宣言しない
+#   - uid は書かず、CLIに新規発行させる(＝新しい拡張として登録し直す)
+
+# ローカルにインストール済みの @shopify/ui-extensions-react のバージョン(2025.7.x)と
+# 揃えること。ここがズレているとビルド成果物とランタイムの期待が食い違う。
+api_version = "2025-07"
+
+[[extensions]]
+name = "gacha-thank-you"
+handle = "gacha-thank-you"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/ThankYou.jsx"
+target = "purchase.thank-you.block.render"
+
+# マーチャントがチェックアウトエディタでブロックを配置する際に入力する設定項目。
+# ガチャページのURLをコードにハードコードせず、ここから注入する。
+
+[extensions.settings]
+[[extensions.settings.fields]]
+key = "gacha_page_url"
+type = "single_line_text_field"
+name = "ガチャページのURL"
+description = "決済完了後に案内するガチャページの完全なURL(例: https://your-shop.myshopify.com/pages/gacha)"
