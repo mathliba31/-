@@ -38,12 +38,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = getSupabaseAdmin();
 
+  // 1件ずつ順番にupsertすると、景品数が多いコレクションでは
+  // (GraphQLページング + N回のDB往復)の合計がVercel関数のmaxDuration(15秒)に
+  // 迫り、タイムアウトで一部だけ反映された不整合な状態になりうる。
+  // 1回のbulk upsertにまとめることでDB往復を1回に減らす。
   let upsertedCount = 0;
   const failures: Array<{ variant_id: string; message: string }> = [];
 
-  for (const prize of synced.prizes) {
+  if (synced.prizes.length > 0) {
     const { error } = await supabase.from('prizes').upsert(
-      {
+      synced.prizes.map((prize) => ({
         shopify_variant_id: prize.variantId,
         name: prize.name,
         weight: prize.weight,
@@ -54,15 +58,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         stock_limit: prize.stockLimit,
         is_guaranteed_pool: prize.isGuaranteedPool,
         is_active: true,
-      },
+      })),
       { onConflict: 'shopify_variant_id' },
     );
 
     if (error) {
-      console.error('sync-prizes: upsert failed', prize.variantId, error);
-      failures.push({ variant_id: prize.variantId, message: error.message });
+      console.error('sync-prizes: bulk upsert failed', error);
+      for (const prize of synced.prizes) {
+        failures.push({ variant_id: prize.variantId, message: error.message });
+      }
     } else {
-      upsertedCount++;
+      upsertedCount = synced.prizes.length;
     }
   }
 

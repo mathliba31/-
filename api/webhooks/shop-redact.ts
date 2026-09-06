@@ -3,6 +3,7 @@ import { env } from '../../lib/env';
 import { verifyWebhookHmac } from '../../lib/webhookAuth';
 import { readRawBody } from '../../lib/rawBody';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
+import { sendAlertEmail } from '../../lib/alertEmail';
 
 export const config = {
   api: {
@@ -46,17 +47,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = getSupabaseAdmin();
 
+  // 記録(insert)は削除処理が最後まで成功した後に行う。先に記録すると、
+  // 削除が途中で失敗したときにShopifyからの再配信が「処理済み」として
+  // 無条件にスキップされ、GDPR消去義務(48時間以内)を果たせなくなるため。
+  // 削除処理自体は`.delete()`のみで冪等(既に消えている行を消しても無害)。
   if (eventId) {
-    const { error: insertEventError } = await supabase
+    const { data: existingEvent } = await supabase
       .from('webhook_events')
-      .insert({ shopify_event_id: eventId, topic: 'shop/redact' });
-
-    if (insertEventError) {
-      if (insertEventError.code === '23505') {
-        return res.status(200).json({ status: 'already_processed' });
-      }
-      console.error('webhook_events insert error', insertEventError);
-      return res.status(500).json({ error: 'internal_error' });
+      .select('shopify_event_id')
+      .eq('shopify_event_id', eventId)
+      .maybeSingle();
+    if (existingEvent) {
+      return res.status(200).json({ status: 'already_processed' });
     }
   }
 
@@ -82,9 +84,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     deleteLedgerError || deleteWeeklyError || deleteCouponsError || deleteDrawsError || deleteCustomersError;
   if (deleteError) {
     console.error('shop/redact: deletion failed', deleteError);
+    await sendAlertEmail(
+      'GDPR消去(shop/redact)処理に失敗(要対応・48時間以内の義務あり)',
+      `ストア: ${payload.shop_domain}\nerror: ${deleteError.message}`,
+    );
     return res.status(500).json({ error: 'internal_error' });
   }
 
   console.log('shop/redact: customer-linked data deleted for', payload.shop_domain);
+
+  if (eventId) {
+    const { error: insertEventError } = await supabase
+      .from('webhook_events')
+      .insert({ shopify_event_id: eventId, topic: 'shop/redact' });
+    if (insertEventError && insertEventError.code !== '23505') {
+      console.error('webhook_events insert error', insertEventError);
+    }
+  }
+
   return res.status(200).json({ status: 'ok' });
 }

@@ -49,22 +49,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = getSupabaseAdmin();
 
+  // 処理済みイベントの早期スキップ(ここでは「記録」ではなく「確認」のみ行う)。
+  // 記録(insert)は処理が最後まで成功した後に行う。先に記録してしまうと、
+  // この後のチケット付与などが途中で失敗したときにShopifyからの再配信が
+  // 無条件に「処理済み」としてスキップされ、チケットが永久に付与されない
+  // ケースが生じるため(grant_tickets自体はref_id単位で冪等になっているので、
+  // 再配信のたびに処理をやり直しても二重付与はしない)。
   if (eventId) {
-    const { error: insertEventError } = await supabase
+    const { data: existingEvent } = await supabase
       .from('webhook_events')
-      .insert({ shopify_event_id: eventId, topic });
-
-    if (insertEventError) {
-      // 一意制約違反 = 処理済みイベント。200を返して終了する。
-      if (insertEventError.code === '23505') {
-        return res.status(200).json({ status: 'already_processed' });
-      }
-      console.error('webhook_events insert error', insertEventError);
-      await sendAlertEmail(
-        'orders/paid Webhookの記録に失敗',
-        `webhook_eventsへの記録に失敗しました。\nevent_id: ${eventId}\nerror: ${insertEventError.message}`,
-      );
-      return res.status(500).json({ error: 'internal_error' });
+      .select('shopify_event_id')
+      .eq('shopify_event_id', eventId)
+      .maybeSingle();
+    if (existingEvent) {
+      return res.status(200).json({ status: 'already_processed' });
     }
   }
 
@@ -128,6 +126,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'クーポン使用記録の更新に失敗',
         `クーポンコード: ${dc.code}\n注文ID: ${orderId}\nerror: ${updateError.message}`,
       );
+    }
+  }
+
+  if (eventId) {
+    const { error: insertEventError } = await supabase
+      .from('webhook_events')
+      .insert({ shopify_event_id: eventId, topic });
+    // 一意制約違反(23505) = 同時配信されたもう一方が先に記録済み。処理自体は
+    // お互いに冪等なので無視してよい。それ以外のエラーはログにだけ残し、
+    // レスポンスには影響させない(処理自体は既に成功しているため)。
+    if (insertEventError && insertEventError.code !== '23505') {
+      console.error('webhook_events insert error', insertEventError);
     }
   }
 
