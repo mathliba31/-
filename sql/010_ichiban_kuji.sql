@@ -123,6 +123,13 @@ create index on kuji_ticket_ledger (campaign_id, shopify_customer_id, created_at
 create index on kuji_prizes (campaign_id);
 create index on kuji_bonus_rules (campaign_id);
 
+-- 同一キャンペーン内で同じtrigger_type×trigger_valueの有効なルールを重複登録できないようにする。
+-- (対策なしだと `select ... into` がSTRICTでないため、重複時は先勝ちで後者が永久に発火しないまま
+--  黙って無視されてしまう。運用ミスを早期に検知するための制約。)
+create unique index kuji_bonus_rules_trigger_key
+  on kuji_bonus_rules (campaign_id, trigger_type, trigger_value)
+  where is_active;
+
 -- 抽選本体。1トランザクションで「くじ券消費→景品決定→節目賞判定」まで行う。
 create or replace function draw_kuji(
   p_campaign_id bigint,
@@ -277,20 +284,25 @@ begin
     for update;
 
   if found then
+    -- ルールの発火チャンスは一度きりなので、対象の節目(trigger_value)は granted_at で
+    -- 消費済みにする。ただし景品在庫が尽きていた場合はクーポン付与自体はスキップする
+    -- (在庫切れの景品をマイナスにしない。remaining_quantity > 0 をここでも確認する)。
     update kuji_bonus_rules set granted_at = now() where id = v_bonus_rule.id;
 
     select kuji_prizes.id, kuji_prizes.name, kuji_prizes.shopify_variant_id, kuji_prizes.discount_type,
            kuji_prizes.discount_value, kuji_prizes.list_price
       into v_bonus_prize
       from kuji_prizes
-      where id = v_bonus_rule.prize_id;
+      where id = v_bonus_rule.prize_id and remaining_quantity > 0;
 
-    update kuji_prizes set remaining_quantity = remaining_quantity - 1 where id = v_bonus_prize.id;
+    if v_bonus_prize.id is not null then
+      update kuji_prizes set remaining_quantity = remaining_quantity - 1 where id = v_bonus_prize.id;
 
-    v_bonus_draw_id := gen_random_uuid();
+      v_bonus_draw_id := gen_random_uuid();
 
-    insert into kuji_draws (id, campaign_id, shopify_customer_id, prize_id, kind, sequence_number, triggered_by_draw_id)
-    values (v_bonus_draw_id, p_campaign_id, p_customer_id, v_bonus_prize.id, 'bonus', v_sequence, v_draw_id);
+      insert into kuji_draws (id, campaign_id, shopify_customer_id, prize_id, kind, sequence_number, triggered_by_draw_id)
+      values (v_bonus_draw_id, p_campaign_id, p_customer_id, v_bonus_prize.id, 'bonus', v_sequence, v_draw_id);
+    end if;
   end if;
 
   return query select
@@ -330,11 +342,16 @@ declare
   v_bonus_rule          record;
   v_bonus_prize         record;
   v_bonus_draw_id       uuid;
+  v_existing_bonus      record;
 begin
-  -- v_bonus_prize をあらかじめ全列NULLで初期化しておく(理由はdraw_kuji関数のコメント参照)。
+  -- v_bonus_prize / v_existing_bonus をあらかじめ全列NULLで初期化しておく(理由はdraw_kuji関数のコメント参照)。
   select null::bigint as id, null::text as name, null::text as shopify_variant_id,
          null::text as discount_type, null::integer as discount_value, null::integer as list_price
     into v_bonus_prize;
+
+  select null::uuid as id, null::bigint as prize_id, null::text as name, null::text as shopify_variant_id,
+         null::text as discount_type, null::integer as discount_value, null::integer as list_price
+    into v_existing_bonus;
 
   insert into kuji_participants (campaign_id, shopify_customer_id, ticket_balance)
   values (p_campaign_id, p_customer_id, 0)
@@ -351,10 +368,27 @@ begin
 
   if v_rows = 0 then
     -- 既にこの注文ID×キャンペーンでくじ券付与済み(Webhook再配信からの再試行)。
+    -- このタイミングで節目賞(purchase_sequence)が発火していた場合は、その結果も
+    -- 再現して返す(そうしないとWebhookの再試行でボーナスクーポンの発行が握りつぶされる)。
+    -- 新規参加者になれるのは各顧客につき1回限りなので、この再試行は当時と同じ
+    -- 購入イベントを指している(= triggered_by_draw_id is null のボーナス抽選と1:1対応する)。
     select kuji_participants.ticket_balance into v_balance
       from kuji_participants
       where campaign_id = p_campaign_id and shopify_customer_id = p_customer_id;
-    return query select v_balance, null::uuid, null::bigint, null::text, null::text, null::text, null::integer, null::integer;
+
+    select bd.id, bd.prize_id, bp.name, bp.shopify_variant_id, bp.discount_type, bp.discount_value, bp.list_price
+      into v_existing_bonus
+      from kuji_draws bd
+      join kuji_prizes bp on bp.id = bd.prize_id
+      where bd.campaign_id = p_campaign_id
+        and bd.shopify_customer_id = p_customer_id
+        and bd.kind = 'bonus'
+        and bd.triggered_by_draw_id is null;
+
+    return query select
+      v_balance, v_existing_bonus.id, v_existing_bonus.prize_id, v_existing_bonus.name,
+      v_existing_bonus.shopify_variant_id, v_existing_bonus.discount_type,
+      v_existing_bonus.discount_value, v_existing_bonus.list_price;
     return;
   end if;
 
@@ -383,20 +417,24 @@ begin
       for update;
 
     if found then
+      -- draw_kuji関数と同様、在庫が尽きている場合はクーポン付与をスキップする
+      -- (ルール自体はgranted_atで消費済みにし、再度は発火させない)。
       update kuji_bonus_rules set granted_at = now() where id = v_bonus_rule.id;
 
       select kuji_prizes.id, kuji_prizes.name, kuji_prizes.shopify_variant_id, kuji_prizes.discount_type,
              kuji_prizes.discount_value, kuji_prizes.list_price
         into v_bonus_prize
         from kuji_prizes
-        where id = v_bonus_rule.prize_id;
+        where id = v_bonus_rule.prize_id and remaining_quantity > 0;
 
-      update kuji_prizes set remaining_quantity = remaining_quantity - 1 where id = v_bonus_prize.id;
+      if v_bonus_prize.id is not null then
+        update kuji_prizes set remaining_quantity = remaining_quantity - 1 where id = v_bonus_prize.id;
 
-      v_bonus_draw_id := gen_random_uuid();
+        v_bonus_draw_id := gen_random_uuid();
 
-      insert into kuji_draws (id, campaign_id, shopify_customer_id, prize_id, kind, sequence_number)
-      values (v_bonus_draw_id, p_campaign_id, p_customer_id, v_bonus_prize.id, 'bonus', null);
+        insert into kuji_draws (id, campaign_id, shopify_customer_id, prize_id, kind, sequence_number)
+        values (v_bonus_draw_id, p_campaign_id, p_customer_id, v_bonus_prize.id, 'bonus', null);
+      end if;
     end if;
   end if;
 

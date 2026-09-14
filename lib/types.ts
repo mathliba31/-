@@ -24,21 +24,3 @@ export interface CouponInfo {
   shopifyDiscountId: string | null;
   expiresAt: string;
 }
-
-// --- 一番くじ ---
-
-export interface KujiDrawResult {
-  drawId: string;
-  prize: PrizeInfo;
-  sequenceNumber: number | null;
-  ticketBalance: number;
-  alreadyExisted: boolean;
-  bonusDrawId: string | null;
-  bonusPrize: PrizeInfo | null;
-}
-
-export interface KujiTicketGrantResult {
-  ticketBalance: number;
-  bonusDrawId: string | null;
-  bonusPrize: PrizeInfo | null;
-}
