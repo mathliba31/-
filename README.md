@@ -89,6 +89,8 @@ SHOPIFY_GACHA_COLLECTION_HANDLE  # 「ガチャ景品」コレクションのハ
 | POST | `/api/webhooks/shop-redact` | GDPR必須Webhook: アプリアンインストール後48時間で顧客関連データを削除 |
 | POST | `/api/admin/reissue` | クーポン未発行のdrawを検出し再発行する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
 | POST | `/api/admin/sync-prizes` | Shopifyの「ガチャ景品」コレクション+メタフィールドを`prizes`へ同期する(`Authorization: Bearer <ADMIN_API_SECRET>`) |
+| GET | `/api/proxy/kuji-status` | 一番くじの残高・残り口数・景品ラインナップを返す(`?campaign=<key>`必須。App Proxy経由) |
+| POST | `/api/proxy/kuji-draw` | 一番くじを1口引いてクーポンを発行する(App Proxy経由) |
 | GET / POST | `/api/admin/events` | `campaign_events`の一覧取得・作成(App Bridgeセッショントークンで認証) |
 | GET | `/api/admin-ui` | Shopify埋め込みのイベント設定画面(HTML) |
 | PATCH / DELETE | `/api/admin/events/:id` | `campaign_events`の更新・削除(App Bridgeセッショントークンで認証) |
@@ -124,6 +126,41 @@ uri = "https://<VercelのURL>/api/webhooks/shop-redact"
 紐づくチケット残高・抽選履歴・クーポンのみ)のため、`customers/redact` は受領確認のみ返す。
 `shop/redact` はアンインストール48時間後に顧客関連データ(`customers`/`ticket_ledger`/
 `weekly_counters`/`draws`/`coupons`)を削除する(景品マスタ等の運用設定は残す)。
+
+## 一番くじ機能
+
+ガチャ(確率抽選・当たりの重複あり・チケットは評価期間を通じて共通)とは別に、
+「総口数固定・重複当選なし・くじ券はキャンペーンごとの専用通貨」の一番くじ機能を持つ。
+ガチャ側のテーブル・エンドポイントとは完全に独立しており(`kuji_`プレフィックスの
+テーブル群、`draw_kuji`/`grant_kuji_tickets`関数)、両方を同時に運用しても干渉しない。
+
+- **総口数固定・重複なし**: 景品(`kuji_prizes`)は`remaining_quantity`を持ち、抽選のたびに
+  減っていく。景品ごとの残数に比例して抽選するため、総口数(`kuji_campaigns.total_slots`)を
+  引き切ると景品も0になる。
+- **くじ券はキャンペーン専用の別通貨**: `kuji_participants(campaign_id, shopify_customer_id)`に
+  残高を持つ。ガチャのチケットとは一切混ざらない。
+- **節目賞(ボーナス)**: `kuji_bonus_rules`で「何口目の抽選か」(`draw_sequence`。ラストワン賞は
+  `trigger_value = total_slots`として表現する)、または「何人目の新規購入者か」
+  (`purchase_sequence`)を条件に、通常の抽選結果とは別に追加でもう1つ景品を付与する
+  (仕様上「上乗せ」。差し替えではない)。各ルールは1回限りしか発火しない。
+
+### 新しいキャンペーンの作り方(手動でSQLを実行)
+
+1. `kuji_campaigns`に1行追加(`key`はページ・チケット商品と紐付ける識別子。`status`は
+   `draft`のままだと`draw_kuji`が`CAMPAIGN_NOT_ACTIVE`を返すので、受付開始時に`active`にする)。
+2. `kuji_prizes`に景品を追加。`total_quantity`と`remaining_quantity`は同じ値で初期化する。
+   節目賞専用の景品は`is_bonus = true`にして、通常抽選のプールから除外する。
+3. くじ券商品(Shopify商品バリアント)を`kuji_ticket_products`に登録
+   (`shopify_variant_id`, `campaign_id`, `ticket_count`)。この商品を購入すると
+   `orders/paid` Webhookが該当キャンペーンのくじ券を付与する。
+4. 節目賞を設定する場合は`kuji_bonus_rules`に追加(`prize_id`は2で登録した`is_bonus = true`の景品)。
+5. 受付を開始したら`kuji_campaigns.status`を`active`に更新する。
+
+### クーポン未発行の救済
+
+ガチャ側の`find_draws_missing_coupon`/`/api/admin/reissue`に相当するものとして、
+`find_kuji_draws_missing_coupon(p_draw_id, p_limit)`関数がある(専用の管理エンドポイントは
+未実装。必要になったらガチャ側の`/api/admin/reissue`と同じ構造で追加する)。
 
 ## 景品の管理(Shopify商品メタフィールド + コレクション同期)
 

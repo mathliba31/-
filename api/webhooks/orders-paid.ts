@@ -4,6 +4,8 @@ import { verifyWebhookHmac } from '../../lib/webhookAuth';
 import { readRawBody } from '../../lib/rawBody';
 import { getSupabaseAdmin } from '../../lib/supabaseAdmin';
 import { sendAlertEmail } from '../../lib/alertEmail';
+import { issueKujiCouponForDraw } from '../../lib/issueKujiCoupon';
+import type { DiscountType, PrizeInfo } from '../../lib/types';
 
 // HMAC検証には生ボディが必要なため、Vercelの自動JSONパースを無効化する。
 export const config = {
@@ -26,6 +28,17 @@ interface ShopifyOrderPaidPayload {
   customer?: { id: number | string } | null;
   line_items?: ShopifyLineItem[];
   discount_codes?: ShopifyDiscountCode[];
+}
+
+interface GrantKujiTicketsRow {
+  ticket_balance: number;
+  bonus_draw_id: string | null;
+  bonus_prize_id: number | null;
+  bonus_prize_name: string | null;
+  bonus_shopify_variant_id: string | null;
+  bonus_discount_type: DiscountType | null;
+  bonus_discount_value: number | null;
+  bonus_list_price: number | null;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -111,7 +124,78 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // 4. クーポン使用の記録(効果測定の生命線)
+  // 3b. 一番くじ券の付与(1注文に複数キャンペーンのくじ券が混在してもよいよう、
+  //     キャンペーンごとに数量を集計してから個別にgrant_kuji_ticketsを呼ぶ)。
+  if (customerId && payload.line_items?.length) {
+    const { data: kujiTicketProducts } = await supabase
+      .from('kuji_ticket_products')
+      .select('shopify_variant_id, campaign_id, ticket_count');
+
+    const kujiTicketByVariant = new Map(
+      (kujiTicketProducts ?? []).map((t) => [t.shopify_variant_id, { campaignId: t.campaign_id, ticketCount: t.ticket_count }]),
+    );
+
+    const kujiTotalsByCampaign = new Map<number, number>();
+    for (const item of payload.line_items) {
+      if (item.variant_id == null) continue;
+      const mapping = kujiTicketByVariant.get(String(item.variant_id));
+      if (mapping) {
+        kujiTotalsByCampaign.set(
+          mapping.campaignId,
+          (kujiTotalsByCampaign.get(mapping.campaignId) ?? 0) + mapping.ticketCount * item.quantity,
+        );
+      }
+    }
+
+    for (const [campaignId, totalTickets] of kujiTotalsByCampaign) {
+      const { data: grantData, error: grantError } = await supabase.rpc('grant_kuji_tickets', {
+        p_campaign_id: campaignId,
+        p_customer_id: customerId,
+        p_delta: totalTickets,
+        p_ref_id: orderId,
+      });
+      if (grantError) {
+        console.error('grant_kuji_tickets rpc error', grantError);
+        await sendAlertEmail(
+          '一番くじ: くじ券付与に失敗(要手動対応)',
+          `注文の支払いは完了していますが、くじ券付与に失敗しました。\n` +
+            `注文ID: ${orderId}\n顧客ID: ${customerId}\nキャンペーンID: ${campaignId}\n付与予定数: ${totalTickets}\nerror: ${grantError.message}`,
+        );
+        return res.status(500).json({ error: 'internal_error' });
+      }
+
+      const grantRow = (Array.isArray(grantData) ? grantData[0] : grantData) as GrantKujiTicketsRow | undefined;
+      if (grantRow?.bonus_draw_id && grantRow.bonus_prize_id != null) {
+        const bonusPrize: PrizeInfo = {
+          id: grantRow.bonus_prize_id,
+          name: grantRow.bonus_prize_name ?? '',
+          shopifyVariantId: grantRow.bonus_shopify_variant_id ?? '',
+          discountType: (grantRow.bonus_discount_type ?? 'free_product') as DiscountType,
+          discountValue: grantRow.bonus_discount_value ?? 0,
+          listPrice: grantRow.bonus_list_price ?? 0,
+        };
+        try {
+          await issueKujiCouponForDraw({
+            supabase,
+            kujiDrawId: grantRow.bonus_draw_id,
+            shopifyCustomerId: customerId,
+            prize: bonusPrize,
+          });
+        } catch (err) {
+          // 購入者数の節目賞は成立済み(kuji_draws挿入済み)。クーポン発行だけ失敗した場合は
+          // find_kuji_draws_missing_coupon による救済に任せ、Webhook自体は成功として扱う。
+          console.error('kuji purchase-sequence bonus coupon issuance failed', err);
+          await sendAlertEmail(
+            '一番くじ: 購入者数ボーナスのクーポン発行に失敗(要対応)',
+            `顧客ID: ${customerId}\n節目賞抽選ID: ${grantRow.bonus_draw_id}\nerror: ${err instanceof Error ? err.message : 'unknown'}`,
+          );
+        }
+      }
+    }
+  }
+
+  // 4. クーポン使用の記録(効果測定の生命線)。コードはガチャ・一番くじで採番方式を共有しており
+  //    衝突しない前提のため、両テーブルへの更新を無条件に試みる(該当行が無ければ0件更新のみ)。
   const discountCodes = payload.discount_codes ?? [];
   for (const dc of discountCodes) {
     if (!dc.code) continue;
@@ -125,6 +209,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await sendAlertEmail(
         'クーポン使用記録の更新に失敗',
         `クーポンコード: ${dc.code}\n注文ID: ${orderId}\nerror: ${updateError.message}`,
+      );
+    }
+
+    const { error: kujiUpdateError } = await supabase
+      .from('kuji_coupons')
+      .update({ status: 'used', used_at: new Date().toISOString(), shopify_order_id: orderId })
+      .eq('code', dc.code)
+      .is('used_at', null);
+    if (kujiUpdateError) {
+      console.error('kuji coupon usage update error', kujiUpdateError);
+      await sendAlertEmail(
+        '一番くじ: クーポン使用記録の更新に失敗',
+        `クーポンコード: ${dc.code}\n注文ID: ${orderId}\nerror: ${kujiUpdateError.message}`,
       );
     }
   }
