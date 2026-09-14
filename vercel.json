@@ -1,5 +1,5 @@
 {
-  "buildCommand": false,
+  "buildCommand": null,
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 15
