@@ -5,10 +5,16 @@
   - チケット購入は商品ページに遷移させず、このページ内のフォームから直接 /cart/add → チェックアウトへ
     進めるようにしている(商品ページ側のテーマ設定に数量セレクターが無くても複数枚購入できるようにするため)。
   - チケット商品のハンドルが変わった場合はここを更新すること。
+  - 見た目は「カプセルトイ(ガチャガチャ)」の実機を模したデザイン(ドーム・つまみ・取り出し口)。
+    Zen Maru Gothic / Zen Kaku Gothic New を使うため、下記でGoogle Fontsを読み込んでいる。
 {% endcomment %}
 {% assign ticket_product_handle = 'gacha-ticket' %}
 {% assign ticket_product = all_products[ticket_product_handle] %}
 {% assign ticket_variant = ticket_product.selected_or_first_available_variant %}
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700;900&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
 
 <div id="gacha-app" class="gacha-app">
   <h1 class="gacha-title">ガチャ</h1>
@@ -23,28 +29,55 @@
       <p>ガチャを引くにはチケットが必要です。下記からチケットを購入してください。</p>
     </div>
 
-    <div id="gacha-state-ready" class="gacha-panel" hidden>
-      <div class="gacha-status-row">
-        <p class="gacha-balance">チケット残高: <strong id="gacha-balance-value">0</strong>枚</p>
-        <p id="gacha-pity-text" class="gacha-pity-text"></p>
-      </div>
+    <div id="gacha-state-ready" class="gacha-panel gacha-panel--machine" hidden>
+      <p class="gacha-machine-sub">つまみをまわしてカプセルをゲット。はずれはありません。</p>
 
       <div class="gacha-machine">
-        <div id="gacha-machine-idle" class="gacha-machine-visual">
-          <div class="gacha-capsule"></div>
+        <div class="gacha-dome">
+          <span class="gacha-ball" style="left:34px;top:66px;width:30px;height:30px;background:var(--gacha-t1);"></span>
+          <span class="gacha-ball" style="left:78px;top:44px;width:26px;height:26px;background:var(--gacha-t2);"></span>
+          <span class="gacha-ball" style="left:122px;top:32px;width:32px;height:32px;background:var(--gacha-t3);"></span>
+          <span class="gacha-ball" style="left:168px;top:40px;width:28px;height:28px;background:#8BC7A0;"></span>
+          <span class="gacha-ball" style="left:210px;top:60px;width:25px;height:25px;background:#B58BD1;"></span>
+          <span class="gacha-ball" style="left:52px;top:100px;width:28px;height:28px;background:var(--gacha-t1);"></span>
+          <span class="gacha-ball" style="left:96px;top:84px;width:24px;height:24px;background:var(--gacha-t2);"></span>
+          <span class="gacha-ball" style="left:140px;top:78px;width:30px;height:30px;background:var(--gacha-t3);"></span>
+          <span class="gacha-ball" style="left:186px;top:90px;width:26px;height:26px;background:#8BC7A0;"></span>
+          <span class="gacha-ball" style="left:224px;top:104px;width:23px;height:23px;background:#B58BD1;"></span>
+          <span class="gacha-ball" style="left:70px;top:126px;width:25px;height:25px;background:var(--gacha-t2);"></span>
+          <span class="gacha-ball" style="left:118px;top:120px;width:27px;height:27px;background:var(--gacha-t3);"></span>
+          <span class="gacha-ball" style="left:164px;top:124px;width:24px;height:24px;background:var(--gacha-t1);"></span>
         </div>
-        <div id="gacha-machine-drawing" class="gacha-machine-visual" hidden>
-          <div class="gacha-capsule gacha-capsule--spin"></div>
+        <div class="gacha-shell">
+          <div class="gacha-plate"><span>チケット残高</span><strong id="gacha-balance-value">0</strong><span>&nbsp;枚</span></div>
+
+          <div class="gacha-pity-row">
+            <p id="gacha-pity-text" class="gacha-pity-text"></p>
+          </div>
+
+          <div id="gacha-knob" class="gacha-knob" aria-hidden="true"></div>
+          <button id="gacha-draw-btn" type="button" class="gacha-draw-btn">
+            ガチャを引く(チケット1枚を消費)
+          </button>
+
+          <div class="gacha-tray">
+            <p id="gacha-tray-hint" class="gacha-tray-hint" hidden>まもなく結果が出ます...</p>
+          </div>
         </div>
       </div>
-
-      <button id="gacha-draw-btn" type="button" class="gacha-btn gacha-btn--primary gacha-btn--large">
-        ガチャを引く(チケット1枚を消費)
-      </button>
     </div>
 
     <div id="gacha-state-result" class="gacha-panel gacha-panel--center" hidden>
+      <div id="gacha-reveal-overlay" class="gacha-reveal-overlay" hidden></div>
+      <div id="gacha-reveal-rays" class="gacha-reveal-rays" hidden></div>
+
       <p class="gacha-result-label" id="gacha-result-guaranteed" hidden>確定枠(天井)当選!</p>
+      <div class="gacha-result-visual">
+        <div id="gacha-result-burst" class="gacha-burst" hidden></div>
+        <div class="gacha-capsule-open">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+      </div>
       <h2 id="gacha-result-prize-name" class="gacha-result-prize"></h2>
       <p class="gacha-result-code">クーポンコード: <code id="gacha-result-code"></code></p>
       <p class="gacha-result-expires">有効期限: <span id="gacha-result-expires"></span>(1回のみ使用可能)</p>
@@ -57,14 +90,20 @@
     </div>
 
     <div id="gacha-state-error" class="gacha-panel gacha-panel--center" hidden>
+      <div class="gacha-error-icon">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v5M12 16h.01"/></svg>
+      </div>
       <p id="gacha-error-message" class="gacha-error-message"></p>
       <button id="gacha-error-retry-btn" type="button" class="gacha-btn gacha-btn--secondary">
         もう一度読み込む
       </button>
     </div>
 
-    <div id="gacha-ticket-purchase" class="gacha-panel gacha-panel--center">
-      <h2 class="gacha-ticket-purchase-title">チケットを購入する</h2>
+    <div id="gacha-ticket-purchase" class="gacha-panel gacha-panel--center gacha-panel--card">
+      <h2 class="gacha-ticket-purchase-title">
+        <svg class="gacha-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4V8Z"/><path d="M13 5v2M13 17v2M13 10.5v3"/></svg>
+        チケットを購入する
+      </h2>
       {% if ticket_variant %}
         <form method="post" action="{{ routes.cart_add_url }}" class="gacha-ticket-form">
           <input type="hidden" name="id" value="{{ ticket_variant.id }}">
@@ -93,15 +132,8 @@
     <details class="gacha-accordion" open>
       <summary>景品と当選確率</summary>
       <table class="gacha-prize-table">
-        <thead>
-          <tr>
-            <th>景品</th>
-            <th>確率</th>
-            <th>確定枠対象</th>
-          </tr>
-        </thead>
         <tbody id="gacha-prize-table-body">
-          <tr><td colspan="3">読み込み中...</td></tr>
+          <tr><td colspan="2">読み込み中...</td></tr>
         </tbody>
       </table>
     </details>
@@ -117,13 +149,28 @@
 
 <style>
   .gacha-app {
+    --gacha-shell: #EDE8DC;
+    --gacha-shell-lo: #CFC7B6;
+    --gacha-shell-hi: #FFFCF5;
+    --gacha-metal: #C6CCD0;
+    --gacha-metal-lo: #7F888D;
+    --gacha-ink: #1D3236;
+    --gacha-ink-soft: #5C7276;
+    --gacha-coin: #FFCC2E;
+    --gacha-t1: #5FA8C7;
+    --gacha-t2: #F0A830;
+    --gacha-t3: #D6456B;
+
     max-width: 480px;
     margin: 0 auto;
     padding: 16px;
-    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
-    color: #222;
+    font-family: "Zen Kaku Gothic New", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: var(--gacha-ink);
+    background: #fff;
   }
   .gacha-title {
+    font-family: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
+    font-weight: 900;
     font-size: 22px;
     text-align: center;
     margin: 8px 0 20px;
@@ -138,52 +185,162 @@
   .gacha-panel--center {
     text-align: center;
   }
-  .gacha-status-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 16px;
-    text-align: center;
+  .gacha-panel--card {
+    background: var(--gacha-shell-hi);
   }
   .gacha-balance {
     font-size: 16px;
     margin: 0;
   }
-  .gacha-pity-text {
+
+  /* --- カプセルマシン(通常・抽選中) --- */
+  .gacha-panel--machine {
+    border: none;
+    background: none;
+    padding: 0;
+  }
+  .gacha-machine-sub {
+    text-align: center;
     font-size: 13px;
-    color: #b8860b;
-    margin: 0;
+    color: var(--gacha-ink-soft);
+    margin: 0 0 18px;
+    line-height: 1.7;
   }
   .gacha-machine {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 160px;
-    margin-bottom: 20px;
+    position: relative;
+    width: 100%;
+    max-width: 296px;
+    margin: 0 auto;
+    filter: drop-shadow(0 14px 18px rgba(29, 50, 54, .18));
   }
-  .gacha-machine-visual {
-    display: flex;
-    justify-content: center;
-    align-items: center;
+  .gacha-dome {
+    position: relative;
+    height: 150px;
+    border-radius: 140px 140px 16px 16px;
+    background: linear-gradient(165deg, #EFFAFB 0%, #D9EEF1 45%, #EFFAFB 100%);
+    border: 3px solid #D3E3E5;
+    border-bottom: none;
+    overflow: hidden;
   }
-  .gacha-capsule {
-    width: 90px;
-    height: 90px;
+  .gacha-dome::after {
+    content: "";
+    position: absolute;
+    top: 12px;
+    left: 22px;
+    width: 46px;
+    height: 82px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #ff6b6b 50%, #ffe66d 50%);
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .8), rgba(255, 255, 255, 0));
+    transform: rotate(-14deg);
   }
-  .gacha-capsule--spin {
-    animation: gacha-spin 1.1s linear infinite, gacha-bounce 0.6s ease-in-out infinite alternate;
+  .gacha-ball {
+    position: absolute;
+    border-radius: 50%;
+    box-shadow: inset -4px -6px 0 rgba(0, 0, 0, .14), inset 3px 4px 0 rgba(255, 255, 255, .45);
   }
-  @keyframes gacha-spin {
+  .gacha-shell {
+    background: linear-gradient(180deg, var(--gacha-shell-hi), var(--gacha-shell) 30%, var(--gacha-shell-lo));
+    border: 1px solid #e5e5e5;
+    border-top: none;
+    border-radius: 0 0 20px 20px;
+    padding: 16px 18px 18px;
+  }
+  .gacha-plate {
+    background: var(--gacha-ink);
+    color: var(--gacha-shell);
+    border-radius: 8px;
+    padding: 9px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+  }
+  .gacha-plate strong {
+    font-family: "Zen Maru Gothic", sans-serif;
+    font-weight: 900;
+    font-size: 17px;
+    color: var(--gacha-coin);
+  }
+  .gacha-pity-row {
+    margin-top: 12px;
+    text-align: center;
+    min-height: 4px;
+  }
+  .gacha-pity-text {
+    font-size: 12px;
+    color: #b8860b;
+    font-weight: 700;
+    margin: 0;
+  }
+  .gacha-knob {
+    display: block;
+    margin: 18px auto 0;
+    width: 88px;
+    height: 88px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 34% 30%, #FFFFFF, var(--gacha-metal) 42%, var(--gacha-metal-lo) 100%);
+    box-shadow: 0 5px 0 #6B7478, 0 10px 16px rgba(0, 0, 0, .3);
+    position: relative;
+  }
+  .gacha-knob::before {
+    content: "";
+    position: absolute;
+    inset: 50% 13px auto;
+    height: 11px;
+    margin-top: -6px;
+    border-radius: 6px;
+    background: linear-gradient(180deg, #5E6669, #8F989C);
+  }
+  .gacha-knob.is-spinning {
+    animation: gacha-knob-turn 1.6s linear infinite;
+    filter: saturate(.4) brightness(.9);
+  }
+  @keyframes gacha-knob-turn {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
   }
-  @keyframes gacha-bounce {
-    from { transform: translateY(0) rotate(0deg); }
-    to { transform: translateY(-14px) rotate(180deg); }
+  .gacha-draw-btn {
+    display: block;
+    width: 100%;
+    max-width: 250px;
+    margin: 12px auto 0;
+    padding: 13px 18px;
+    border: 2px solid var(--gacha-ink);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--gacha-ink);
+    font-family: "Zen Maru Gothic", sans-serif;
+    font-weight: 900;
+    font-size: 14px;
+    text-align: center;
+    cursor: pointer;
   }
+  .gacha-draw-btn:disabled {
+    border-color: var(--gacha-metal-lo);
+    background: #f1f2f6;
+    color: var(--gacha-ink-soft);
+    cursor: not-allowed;
+  }
+  .gacha-tray {
+    position: relative;
+    margin-top: 14px;
+    height: 56px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #20343A, #2E464D);
+    box-shadow: inset 0 5px 10px rgba(0, 0, 0, .55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .gacha-tray-hint {
+    text-align: center;
+    font-size: 11px;
+    color: #9FBDC0;
+    margin: 0;
+    padding: 0 12px;
+  }
+
+  /* --- ボタン共通 --- */
   .gacha-btn {
     display: inline-block;
     width: 100%;
@@ -191,8 +348,9 @@
     padding: 14px 20px;
     border-radius: 999px;
     border: none;
-    font-size: 15px;
-    font-weight: 600;
+    font-family: "Zen Maru Gothic", sans-serif;
+    font-weight: 900;
+    font-size: 14px;
     text-align: center;
     text-decoration: none;
     cursor: pointer;
@@ -211,12 +369,18 @@
     cursor: not-allowed;
   }
   .gacha-btn--large {
-    font-size: 17px;
+    font-size: 16px;
     padding: 16px 20px;
   }
   .gacha-ticket-purchase-title {
+    font-family: "Zen Maru Gothic", sans-serif;
     font-size: 15px;
+    font-weight: 700;
     margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
   }
   .gacha-ticket-form {
     display: flex;
@@ -251,13 +415,57 @@
     width: auto;
     padding: 12px 28px;
   }
+
+  /* --- 結果 --- */
   .gacha-result-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: #ff9f1a;
+    font-family: "Zen Maru Gothic", sans-serif;
     font-weight: 700;
     margin: 0 0 8px;
+    font-size: 14px;
+  }
+  .gacha-result-visual {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 110px;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .gacha-burst {
+    position: absolute;
+    width: 130px;
+    height: 130px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 159, 26, 0.25) 0%, rgba(255, 159, 26, 0) 70%);
+  }
+  .gacha-capsule-open {
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ff6b6b 50%, #ffe66d 50%);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .gacha-capsule-open svg {
+    color: #fff;
+  }
+  #gacha-state-result.is-guaranteed .gacha-capsule-open {
+    width: 96px;
+    height: 96px;
+    background: linear-gradient(135deg, #ffd166 45%, #ff9f1a 100%);
+    box-shadow: 0 4px 14px rgba(255, 159, 26, 0.35);
   }
   .gacha-result-prize {
+    font-family: "Zen Maru Gothic", sans-serif;
     font-size: 20px;
+    font-weight: 900;
     margin: 0 0 12px;
   }
   .gacha-result-code code {
@@ -270,6 +478,57 @@
     font-size: 13px;
     color: #666;
     margin-bottom: 20px;
+  }
+
+  /* 特別景品(確定枠)の当選演出: 画面全体を一瞬暗転させてから照らし出すように結果を見せる */
+  .gacha-reveal-overlay {
+    position: fixed;
+    inset: 0;
+    background: #05030a;
+    z-index: 90;
+    pointer-events: none;
+    animation: gacha-reveal-flash 2.1s ease forwards;
+  }
+  .gacha-reveal-rays {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    z-index: 91;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(from 0deg, transparent 0deg, rgba(255, 209, 102, 0.55) 8deg, transparent 16deg, transparent 40deg, rgba(255, 209, 102, 0.4) 48deg, transparent 56deg, transparent 90deg, rgba(255, 209, 102, 0.5) 98deg, transparent 106deg, transparent 140deg, rgba(255, 209, 102, 0.4) 148deg, transparent 156deg, transparent 190deg, rgba(255, 209, 102, 0.5) 198deg, transparent 206deg, transparent 240deg, rgba(255, 209, 102, 0.4) 248deg, transparent 256deg, transparent 290deg, rgba(255, 209, 102, 0.5) 298deg, transparent 306deg, transparent 330deg, rgba(255, 209, 102, 0.4) 338deg, transparent 346deg);
+    border-radius: 50%;
+    opacity: 0;
+    animation: gacha-rays-flash 2.1s ease forwards;
+  }
+  @keyframes gacha-reveal-flash {
+    0%   { opacity: 0; }
+    12%  { opacity: 1; }
+    55%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes gacha-rays-flash {
+    0%   { opacity: 0; width: 10px; height: 10px; }
+    18%  { opacity: 1; width: 900px; height: 900px; }
+    55%  { opacity: 0.9; width: 900px; height: 900px; }
+    100% { opacity: 0; width: 900px; height: 900px; }
+  }
+  #gacha-state-result.is-guaranteed {
+    animation: gacha-panel-reveal 0.7s cubic-bezier(.2, .7, .3, 1.2) both;
+    animation-delay: 1.05s;
+  }
+  @keyframes gacha-panel-reveal {
+    0%   { opacity: 0; transform: scale(0.85); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  .gacha-error-icon {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 12px;
+    color: #c0392b;
   }
   .gacha-error-message {
     color: #c0392b;
@@ -286,7 +545,8 @@
     background: #fafafa;
   }
   .gacha-accordion summary {
-    font-weight: 600;
+    font-family: "Zen Maru Gothic", sans-serif;
+    font-weight: 700;
     cursor: pointer;
   }
   .gacha-prize-table {
@@ -294,18 +554,35 @@
     border-collapse: collapse;
     margin-top: 10px;
     font-size: 13px;
+    color: var(--gacha-ink-soft);
   }
-  .gacha-prize-table th,
   .gacha-prize-table td {
-    text-align: left;
-    padding: 6px 4px;
+    padding: 9px 4px;
     border-bottom: 1px solid #eee;
+  }
+  .gacha-prize-table tr:last-child td {
+    border-bottom: none;
+  }
+  .gacha-prize-table td:last-child {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+  }
+  .gacha-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 8px;
   }
   .gacha-notice-list {
     font-size: 12px;
     color: #555;
     line-height: 1.7;
     padding-left: 18px;
+  }
+  .gacha-icon {
+    flex-shrink: 0;
   }
 </style>
 
@@ -316,6 +593,8 @@
 
   var PROXY_BASE = "/apps/gacha";
   var DRAW_ANIMATION_MS = 2000; // 演出時間(1.5〜2.5秒の範囲で固定値を使用)
+  var PRIZE_DOT_COLORS = ["var(--gacha-t1)", "var(--gacha-t2)", "var(--gacha-t3)", "#8BC7A0", "#B58BD1"];
+  var GUARANTEED_REVEAL_MS = 2200; // 暗転演出(gacha-reveal-flash)が終わるまでの時間
 
   var els = {
     loading: document.getElementById("gacha-state-loading"),
@@ -325,10 +604,13 @@
     error: document.getElementById("gacha-state-error"),
     balanceValue: document.getElementById("gacha-balance-value"),
     pityText: document.getElementById("gacha-pity-text"),
-    machineIdle: document.getElementById("gacha-machine-idle"),
-    machineDrawing: document.getElementById("gacha-machine-drawing"),
+    knob: document.getElementById("gacha-knob"),
+    trayHint: document.getElementById("gacha-tray-hint"),
     drawBtn: document.getElementById("gacha-draw-btn"),
     resultGuaranteed: document.getElementById("gacha-result-guaranteed"),
+    resultBurst: document.getElementById("gacha-result-burst"),
+    revealOverlay: document.getElementById("gacha-reveal-overlay"),
+    revealRays: document.getElementById("gacha-reveal-rays"),
     resultPrizeName: document.getElementById("gacha-result-prize-name"),
     resultCode: document.getElementById("gacha-result-code"),
     resultExpires: document.getElementById("gacha-result-expires"),
@@ -341,6 +623,8 @@
     noticeThreshold: document.getElementById("gacha-notice-threshold"),
     noticeValidDays: document.getElementById("gacha-notice-valid-days"),
   };
+
+  var DRAW_BTN_IDLE_TEXT = "ガチャを引く(チケット1枚を消費)";
 
   function showOnly(el) {
     [els.loading, els.zero, els.ready, els.result, els.error].forEach(function (panel) {
@@ -372,15 +656,15 @@
 
   function renderPrizeTable(prizes) {
     if (!prizes || prizes.length === 0) {
-      els.prizeTableBody.innerHTML = "<tr><td colspan=\"3\">現在ラインナップはありません</td></tr>";
+      els.prizeTableBody.innerHTML = "<tr><td colspan=\"2\">現在ラインナップはありません</td></tr>";
       return;
     }
     els.prizeTableBody.innerHTML = prizes
-      .map(function (p) {
-        var name = escapeHtml(p.name);
+      .map(function (p, i) {
+        var name = escapeHtml(p.name) + (p.is_guaranteed_pool ? "(確定枠対象)" : "");
         var prob = formatPercent(p.probability);
-        var pool = p.is_guaranteed_pool ? "○" : "";
-        return "<tr><td>" + name + "</td><td>" + prob + "</td><td>" + pool + "</td></tr>";
+        var color = PRIZE_DOT_COLORS[i % PRIZE_DOT_COLORS.length];
+        return "<tr><td><span class=\"gacha-dot\" style=\"background:" + color + ";\"></span>" + name + "</td><td>" + prob + "</td></tr>";
       })
       .join("");
   }
@@ -435,6 +719,21 @@
       });
   }
 
+  function setDrawingVisual(isDrawing) {
+    els.knob.classList.toggle("is-spinning", isDrawing);
+    els.drawBtn.textContent = isDrawing ? "抽選中..." : DRAW_BTN_IDLE_TEXT;
+    els.trayHint.hidden = !isDrawing;
+  }
+
+  function triggerGuaranteedReveal() {
+    els.revealOverlay.hidden = false;
+    els.revealRays.hidden = false;
+    setTimeout(function () {
+      els.revealOverlay.hidden = true;
+      els.revealRays.hidden = true;
+    }, GUARANTEED_REVEAL_MS);
+  }
+
   var currentIdempotencyKey = null;
 
   function draw() {
@@ -444,8 +743,7 @@
     var key = currentIdempotencyKey;
 
     els.drawBtn.disabled = true;
-    els.machineIdle.hidden = true;
-    els.machineDrawing.hidden = false;
+    setDrawingVisual(true);
 
     var animationDone = new Promise(function (resolve) {
       setTimeout(resolve, DRAW_ANIMATION_MS);
@@ -465,8 +763,7 @@
     Promise.all([animationDone, requestDone])
       .then(function (results) {
         var response = results[1];
-        els.machineDrawing.hidden = true;
-        els.machineIdle.hidden = false;
+        setDrawingVisual(false);
 
         if (!response.ok) {
           els.drawBtn.disabled = false;
@@ -487,21 +784,25 @@
         renderResult(response.body);
       })
       .catch(function () {
-        els.machineDrawing.hidden = true;
-        els.machineIdle.hidden = false;
+        setDrawingVisual(false);
         els.drawBtn.disabled = false;
         showError("通信エラーが発生しました。もう一度お試しください。");
       });
   }
 
   function renderResult(data) {
+    els.result.classList.toggle("is-guaranteed", data.is_guaranteed);
     els.resultGuaranteed.hidden = !data.is_guaranteed;
+    els.resultBurst.hidden = !data.is_guaranteed;
     els.resultPrizeName.textContent = data.prize.name;
     els.resultCode.textContent = data.coupon.code;
     els.resultExpires.textContent = formatDate(data.coupon.expires_at);
     els.resultCheckout.href = data.checkout_url;
     showOnly(els.result);
     els.drawBtn.disabled = false;
+    if (data.is_guaranteed) {
+      triggerGuaranteedReveal();
+    }
   }
 
   els.drawBtn.addEventListener("click", draw);
