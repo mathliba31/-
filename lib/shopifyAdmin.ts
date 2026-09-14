@@ -177,12 +177,13 @@ export async function createDiscountCodeForPrize(params: {
   prize: PrizeInfo;
   shopifyCustomerId: string;
   expiresAt: Date;
+  codePrefix?: string;
 }): Promise<CreateDiscountResult> {
-  const { prize, shopifyCustomerId, expiresAt } = params;
+  const { prize, shopifyCustomerId, expiresAt, codePrefix } = params;
 
   let lastErrorMessage = '';
   for (let attempt = 0; attempt < 3; attempt++) {
-    const code = generateCouponCode();
+    const code = generateCouponCode(codePrefix);
 
     const variables = {
       basicCodeDiscount: {

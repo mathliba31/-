@@ -31,6 +31,7 @@ export async function issueKujiCouponForDraw(params: {
     prize,
     shopifyCustomerId,
     expiresAt,
+    codePrefix: 'KUJI',
   });
 
   const { data, error } = await supabase
